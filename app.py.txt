@@ -1,0 +1,112 @@
+import streamlit as st
+import requests
+import base64
+import pandas as pd
+
+st.set_page_config(page_title="Policy Entry Portal", page_icon="📄", layout="centered")
+
+WEB_APP_URL = st.secrets["WEB_APP_URL"]
+SECRET_KEY = st.secrets["SECRET_KEY"]
+
+def call_backend(payload):
+    payload["secret"] = SECRET_KEY
+    try:
+        res = requests.post(WEB_APP_URL, json=payload, timeout=30)
+        return res.json()
+    except Exception as e:
+        return {"success": False, "message": f"Connection error: {e}"}
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_id = ""
+    st.session_state.expiry = ""
+
+# --- LOGIN SCREEN ---
+if not st.session_state.logged_in:
+    st.title("🔐 Policy Entry Software Login")
+    st.write("Apna User ID aur Password dalkar login karein.")
+
+    with st.form("login_form"):
+        user_id = st.text_input("User ID")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login", use_container_width=True)
+
+        if submit:
+            if not user_id or not password:
+                st.warning("User ID aur Password dono bharein.")
+            else:
+                with st.spinner("Check kar rahe hain..."):
+                    result = call_backend({
+                        "action": "login",
+                        "user_id": user_id,
+                        "password": password
+                    })
+                if result.get("success"):
+                    st.session_state.logged_in = True
+                    st.session_state.user_id = user_id.strip()
+                    st.session_state.expiry = result.get("expiry", "")
+                    st.rerun()
+                else:
+                    st.error(result.get("message", "Login fail ho gaya."))
+
+# --- UPLOAD & STATUS DASHBOARD ---
+else:
+    with st.sidebar:
+        st.success(f"👤 User: **{st.session_state.user_id}**")
+        st.info(f"📅 Plan Valid Till: **{st.session_state.expiry}**")
+        if st.button("Logout", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.user_id = ""
+            st.rerun()
+
+    st.title("📄 Policy PDF Upload Portal")
+
+    uploaded_files = st.file_uploader(
+        "Apni Policy PDF select karein (ek ya ek se zyada)",
+        type=["pdf"],
+        accept_multiple_files=True
+    )
+
+    if st.button("Upload for Policy Entry", type="primary", use_container_width=True):
+        if not uploaded_files:
+            st.warning("Pehle kam se kam ek PDF select karein.")
+        else:
+            for file in uploaded_files:
+                if file.size > 10 * 1024 * 1024:
+                    st.error(f"{file.name} 10 MB se badi hai, skip ki gayi.")
+                    continue
+                with st.spinner(f"{file.name} upload ho rahi hai..."):
+                    file_b64 = base64.b64encode(file.read()).decode("utf-8")
+                    res = call_backend({
+                        "action": "upload",
+                        "user_id": st.session_state.user_id,
+                        "file_name": file.name,
+                        "file_base64": file_b64
+                    })
+                if res.get("success"):
+                    st.success(f"✅ {file.name} upload ho gayi! Queue me lag chuki hai.")
+                else:
+                    st.error(f"❌ {file.name} fail: {res.get('message')}")
+
+    st.divider()
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.subheader("📊 Meri Policies ka Live Status")
+    with col2:
+        st.button("🔄 Refresh")
+
+    with st.spinner("Status load ho raha hai..."):
+        status_res = call_backend({
+            "action": "status",
+            "user_id": st.session_state.user_id
+        })
+
+    if status_res.get("success"):
+        logs = status_res.get("logs", [])
+        if logs:
+            df = pd.DataFrame(logs)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Abhi tak koi policy upload nahi ki gayi hai.")
+    else:
+        st.error(status_res.get("message", "Status load nahi ho paya."))
