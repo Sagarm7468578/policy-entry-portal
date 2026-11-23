@@ -12,7 +12,8 @@ from health_parsers.common import (
     lookup_client_master,
     build_excel_bytes,
     build_sample_master_bytes,
-append_rows_to_local_excel,)
+    append_rows_to_local_excel,
+)
 
 
 def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
@@ -73,7 +74,6 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
         if end_dt:
             policy_status = "INACTIVE" if end_dt.date() < today_ist.date() else "ACTIVE"
 
-        # Har company apna custom agency/premium_mode/dob return kar sakti hai, warna common extractor chalega
         agency = extracted.get("agency") or extract_generic_agency(pdf_text)
         premium_mode = extracted.get("premium_mode") or extract_premium_mode(pdf_text)
         dob = extracted.get("dob") or extract_oldest_dob(pdf_text, extracted.get("start_dt"))
