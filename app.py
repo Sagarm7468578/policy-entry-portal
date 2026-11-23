@@ -17,6 +17,7 @@ WEB_APP_URL = st.secrets["WEB_APP_URL"]
 SECRET_KEY = st.secrets["SECRET_KEY"]
 IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_HEALTH_EXCEL_NAME = "POLICY ENTRY SHEET FOR HEALTH.xlsx"
+MAX_PDF_ROUNDS = 5
 
 
 def call_backend(payload):
@@ -46,6 +47,12 @@ if "pdf_uploader_key" not in st.session_state:
 if "saved_health_rows" not in st.session_state:
     st.session_state.saved_health_rows = None
 
+if "batch_history" not in st.session_state:
+    st.session_state.batch_history = []
+
+if "round_counter" not in st.session_state:
+    st.session_state.round_counter = 0
+
 
 # --- LOGIN SCREEN ---
 if not st.session_state.logged_in:
@@ -74,6 +81,8 @@ if not st.session_state.logged_in:
                         st.session_state.user_id = user_id.strip()
                         st.session_state.expiry = result.get("expiry", "")
                         st.session_state.saved_health_rows = None
+                        st.session_state.batch_history = []
+                        st.session_state.round_counter = 0
                         st.rerun()
                     else:
                         st.error(result.get("message", "Login fail ho gaya."))
@@ -101,6 +110,8 @@ else:
             st.session_state.logged_in = False
             st.session_state.user_id = ""
             st.session_state.saved_health_rows = None
+            st.session_state.batch_history = []
+            st.session_state.round_counter = 0
             st.session_state.pop("last_results", None)
             st.rerun()
 
@@ -244,24 +255,40 @@ else:
                         zf.writestr(fname, fbytes)
                 err_zip_bytes = err_zip_buf.getvalue()
 
-            st.session_state["last_results"] = {
-                "batch_rows": batch_rows,
+            now_ist = datetime.now(IST)
+            st.session_state.round_counter += 1
+            round_no = st.session_state.round_counter
+            ts_file = now_ist.strftime("%Y%m%d_%H%M%S")
+            ts_display = now_ist.strftime("%d-%m-%Y %I:%M:%S %p")
+
+            batch_record = {
+                "round_no": round_no,
+                "timestamp": ts_file,
+                "time_display": ts_display,
+                "total_count": len(done_files) + len(error_files),
                 "done_count": len(done_files),
                 "error_count": len(error_files),
                 "skipped_count": skipped_count,
                 "save_msg": save_msg,
                 "error_details": error_details,
-                "debug_list": debug_list,
                 "all_zip_bytes": all_zip_bytes,
                 "err_zip_bytes": err_zip_bytes,
-                "timestamp": datetime.now(IST).strftime("%Y%m%d_%H%M"),
+            }
+
+            # Last 5 rounds ki history rakhein (sabse naya sabse upar)
+            st.session_state.batch_history.insert(0, batch_record)
+            st.session_state.batch_history = st.session_state.batch_history[:MAX_PDF_ROUNDS]
+
+            st.session_state["last_results"] = {
+                **batch_record,
+                "debug_list": debug_list,
             }
 
             # Entry complete hote hi PDF box auto-clear (Client Master wahi rahega)
             st.session_state.pdf_uploader_key += 1
             st.rerun()
 
-    # --- LAST BATCH SUMMARY (PDF ZIP & ERRORS) ---
+    # --- LAST BATCH SUMMARY (CURRENT ROUND) ---
     if "last_results" in st.session_state:
         res = st.session_state["last_results"]
         st.divider()
@@ -270,33 +297,73 @@ else:
         if res.get("skipped_count", 0) > 0:
             st.info(f"ℹ️ {res['skipped_count']} duplicate policy pehle se saved thi, isliye dobara add nahi ki gayi.")
 
+        st.subheader(f"⚡ Latest Round #{res['round_no']} ({res['time_display']})")
         m1, m2, m3 = st.columns(3)
-        m1.metric("Is Batch ki PDFs", res["done_count"] + res["error_count"])
+        m1.metric("Is Round ki PDFs", res["total_count"])
         m2.metric("Done (YES) ✅", res["done_count"])
         m3.metric("Error (Check Karein) ❌", res["error_count"])
 
         z1, z2 = st.columns(2)
         with z1:
             st.download_button(
-                "📦 Download Sorted PDFs (Done + Error ZIP)",
+                f"📦 Download Round #{res['round_no']} Sorted PDFs (Done + Error ZIP)",
                 data=res["all_zip_bytes"],
-                file_name=f"Sorted_Policies_{res['timestamp']}.zip",
+                file_name=f"Round_{res['round_no']}_Sorted_Policies_{res['timestamp']}.zip",
                 mime="application/zip",
-                use_container_width=True
+                use_container_width=True,
+                key=f"latest_all_{res['round_no']}_{res['timestamp']}"
             )
         with z2:
             if res["err_zip_bytes"]:
                 st.download_button(
-                    "⚠️ Download Only Error PDFs (ZIP)",
+                    f"⚠️ Download Round #{res['round_no']} Only Error PDFs (ZIP)",
                     data=res["err_zip_bytes"],
-                    file_name=f"Error_Policies_{res['timestamp']}.zip",
+                    file_name=f"Round_{res['round_no']}_Error_Policies_{res['timestamp']}.zip",
                     mime="application/zip",
-                    use_container_width=True
+                    use_container_width=True,
+                    key=f"latest_err_{res['round_no']}_{res['timestamp']}"
                 )
 
         if res["error_details"]:
             st.warning("Neeche di gayi PDFs me problem aayi — ye `Error` folder me alag kar di gayi hain:")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
+
+    # --- LAST 5 ROUNDS PDF DOWNLOAD HISTORY ---
+    if st.session_state.batch_history:
+        with st.expander(
+            f"🗂️ Last {len(st.session_state.batch_history)} Rounds PDF Download History (Max {MAX_PDF_ROUNDS} Rounds)",
+            expanded=(len(st.session_state.batch_history) > 1)
+        ):
+            st.caption("Purane rounds ki Done / Error PDFs yahan se kabhi bhi download kar sakte hain (jab tak browser tab khula hai / logout nahi karte).")
+            for b in st.session_state.batch_history:
+                c_info, c_all, c_err = st.columns([2.5, 1.5, 1.5])
+                with c_info:
+                    st.markdown(
+                        f"**Round #{b['round_no']}** — `{b['time_display']}`  \n"
+                        f"Total: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**"
+                    )
+                with c_all:
+                    st.download_button(
+                        f"📦 Round #{b['round_no']} All (ZIP)",
+                        data=b["all_zip_bytes"],
+                        file_name=f"Round_{b['round_no']}_Sorted_Policies_{b['timestamp']}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key=f"hist_all_{b['round_no']}_{b['timestamp']}"
+                    )
+                with c_err:
+                    if b["err_zip_bytes"]:
+                        st.download_button(
+                            f"⚠️ Round #{b['round_no']} Error (ZIP)",
+                            data=b["err_zip_bytes"],
+                            file_name=f"Round_{b['round_no']}_Error_Policies_{b['timestamp']}.zip",
+                            mime="application/zip",
+                            use_container_width=True,
+                            key=f"hist_err_{b['round_no']}_{b['timestamp']}"
+                        )
+                    else:
+                        st.caption("No Error PDFs ✅")
+                st.divider()
 
     # --- PERMANENT MASTER SHEET SECTION (OLD + NEW ENTRIES COMBINED) ---
     st.divider()
