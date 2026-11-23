@@ -130,20 +130,21 @@ def extract_generic_agency(pdf_text: str) -> str:
 
 def extract_premium_mode(pdf_text: str) -> str:
     """Payment Details / Instrument Details se payment mode (CHEQUE / ONLINE / CASH / AUTO DEBIT) nikalta hai."""
-    # 1. Payment Details / Instrument Details section check
     m_pay = re.search(
         r"(?i)(?:Payment\s*Details|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Mode\s*of\s*Payment|Payment\s*Mode)([\s\S]{0,450})",
         pdf_text,
     )
     if m_pay:
         block = m_pay.group(0)
-        # Pincode / HSN jaisi cheezein hata dein taaki 6-digit number me false match na ho
-        clean_block = re.sub(r"(?i)(?:Pin\s*Code|Pincode|HSN\s*Code|Mumbai|Indore|Delhi|Chennai|Hyderabad)\s*[:\-]?\s*\d{6}", "", block)
+        clean_block = re.sub(
+            r"(?i)(?:Pin\s*Code|Pincode|HSN\s*Code|Mumbai|Indore|Delhi|Chennai|Hyderabad)\s*[:\-]?\s*\d{6}",
+            "",
+            block,
+        )
 
         if re.search(r"(?i)\b(?:Cheque|Chq\.?|DD|Demand\s*Draft)\b", clean_block):
             return "CHEQUE"
 
-        # Instrument Details / Instrument No ke aas-paas exact 6-digit number = CHEQUE
         m_inst = re.search(
             r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,220}?(?<![A-Za-z0-9/\-])(\d{6})(?![A-Za-z0-9/\-])",
             clean_block,
@@ -158,7 +159,6 @@ def extract_premium_mode(pdf_text: str) -> str:
         if re.search(r"(?i)\b(?:Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|Credit\s*Card|Debit\s*Card|Card|PG|E-?Pay|Digital)\b", clean_block):
             return "ONLINE"
 
-    # 2. Fallback: Explicit Payment Mode label kahin bhi PDF me
     m_mode = re.search(
         r"(?i)(?:Payment\s*Mode|Mode\s*of\s*Payment)\s*[:\-]\s*(Cheque|Online|UPI|NEFT|RTGS|IMPS|Cash|Card|Credit\s*Card|Debit\s*Card|Auto\s*Debit|ECS|NACH)",
         pdf_text,
@@ -853,6 +853,19 @@ def build_excel_bytes(rows: list) -> bytes:
             22 if col_name in {"Policy Number", "PYP Number"} else 16
         )
 
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def build_sample_master_bytes() -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Client Master"
+    headers = ["Client Name", "Client Code", "Mobile", "Mail Id", "Sub agent", "Family code"]
+    ws.append(headers)
+    ws.append(["RAJESH SHARMA", "CL001", "9876543210", "rajesh@example.com", "AGENT A", "FAM01"])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
