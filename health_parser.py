@@ -99,6 +99,7 @@ def clean_person_name(name: str) -> str:
     if not name:
         return ""
     name = re.sub(r"[\r\n]+", " ", name)
+    name = re.sub(r"\s+\d{4,}.*$", "", name)
     name = re.sub(r"(?i)^\s*((?:MRS|MISS|MR|MS|DR|SMT|SHRI|MASTER|MAST|M/S)(?:\.|\b)\s*)+", "", name)
     name = re.sub(r"\s+", " ", name).strip(" .,:-_")
     return name.upper()
@@ -559,9 +560,9 @@ def extract_fields_by_company(company: str, pdf_text: str) -> dict:
         elif re.search(r"(?i)(?:Senior Citizens Red Carpet|Red Carpet)", pdf_text):
             data["plan_name"], data["sub_type"] = "SENIOR CITIZENS RED CARPET", "MEDICLAIM"
 
-        m = re.search(r"(?i)Customer Name\s*:\s*([^\r\n]+(?:\s*[\r\n]+(?![^\r\n]*:)[^\r\n]+)?)", pdf_text)
+       m = re.search(r"(?i)Customer Name\s*:\s*([^\r\n]+(?:\s*[\r\n]+(?![^\r\n]*(?::|\d))[^\r\n]+)?)", pdf_text)
         if m:
-            raw_name = m.group(1).replace(".", " ")
+            raw_name = re.sub(r"\d.*$", "", m.group(1), flags=re.S).replace(".", " ")
             data["client_name"] = clean_person_name(raw_name)
 
         m = re.search(r"(?i)(?:Policy No|Certificate No)[^\d]{0,15}(\d{15,20})", pdf_text)
