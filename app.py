@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from health_parser import (
+    OUTPUT_COLUMNS,
     process_health_pdf,
     build_excel_bytes,
     build_sample_master_bytes,
@@ -15,15 +16,23 @@ st.set_page_config(page_title="Policy Entry Portal", page_icon="📄", layout="w
 WEB_APP_URL = st.secrets["WEB_APP_URL"]
 SECRET_KEY = st.secrets["SECRET_KEY"]
 IST = timezone(timedelta(hours=5, minutes=30))
+DEFAULT_HEALTH_EXCEL_NAME = "POLICY ENTRY SHEET FOR HEALTH.xlsx"
 
 
 def call_backend(payload):
     payload["secret"] = SECRET_KEY
     try:
-        res = requests.post(WEB_APP_URL, json=payload, timeout=30)
+        res = requests.post(WEB_APP_URL, json=payload, timeout=60)
         return res.json()
     except Exception as e:
         return {"success": False, "message": f"Connection error: {e}"}
+
+
+def load_saved_health_rows(user_id):
+    res = call_backend({"action": "get_health_entries", "user_id": user_id})
+    if res.get("success"):
+        return res.get("rows", []), ""
+    return [], res.get("message", "Saved data load nahi ho paya.")
 
 
 if "logged_in" not in st.session_state:
@@ -33,6 +42,9 @@ if "logged_in" not in st.session_state:
 
 if "pdf_uploader_key" not in st.session_state:
     st.session_state.pdf_uploader_key = 0
+
+if "saved_health_rows" not in st.session_state:
+    st.session_state.saved_health_rows = None
 
 
 # --- LOGIN SCREEN ---
@@ -61,6 +73,7 @@ if not st.session_state.logged_in:
                         st.session_state.logged_in = True
                         st.session_state.user_id = user_id.strip()
                         st.session_state.expiry = result.get("expiry", "")
+                        st.session_state.saved_health_rows = None
                         st.rerun()
                     else:
                         st.error(result.get("message", "Login fail ho gaya."))
@@ -87,6 +100,7 @@ else:
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.user_id = ""
+            st.session_state.saved_health_rows = None
             st.session_state.pop("last_results", None)
             st.rerun()
 
@@ -95,6 +109,14 @@ else:
     if policy_category != "Health Insurance":
         st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein.")
         st.stop()
+
+    # Login ke baad pehli baar user ki purani saved entries cloud se load karein
+    if st.session_state.saved_health_rows is None:
+        with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
+            loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
+            st.session_state.saved_health_rows = loaded_rows
+            if load_err:
+                st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
 
     col_left, col_right = st.columns([1, 2])
 
@@ -122,6 +144,11 @@ else:
             key=f"pdf_uploader_{st.session_state.pdf_uploader_key}"
         )
 
+    skip_duplicates = st.checkbox(
+        "Duplicate Policy auto-skip karein (Agar same Policy Number + Expiry Date pehle se sheet me saved ho)",
+        value=True
+    )
+
     if st.button("🚀 Start Policy Entry", type="primary", use_container_width=True):
         if not uploaded_pdfs:
             st.warning("Pehle kam se kam ek Policy PDF upload karein.")
@@ -137,11 +164,20 @@ else:
                 except Exception as e:
                     st.warning(f"Client Master read nahi ho payi ({e}). Bina master ke entry kar rahe hain.")
 
-            rows = []
+            existing_keys = set()
+            for r in (st.session_state.saved_health_rows or []):
+                pno = str(r.get("Policy Number", "")).strip()
+                exp = str(r.get("Expiry Date", "")).strip()
+                if pno:
+                    existing_keys.add((pno, exp))
+
+            new_rows_to_save = []
+            batch_rows = []
             done_files = []
             error_files = []
             error_details = []
             debug_list = []
+            skipped_count = 0
 
             progress = st.progress(0)
             status_text = st.empty()
@@ -150,8 +186,19 @@ else:
                 status_text.text(f"Processing ({idx + 1}/{len(uploaded_pdfs)}): {pdf.name}")
                 pdf_bytes = pdf.read()
                 row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df)
-                rows.append(row_dict)
                 debug_list.append(debug_info)
+
+                pno = str(row_dict.get("Policy Number", "")).strip()
+                exp = str(row_dict.get("Expiry Date", "")).strip()
+                key = (pno, exp)
+
+                if skip_duplicates and pno and key in existing_keys:
+                    skipped_count += 1
+                else:
+                    batch_rows.append(row_dict)
+                    new_rows_to_save.append(row_dict)
+                    if pno:
+                        existing_keys.add(key)
 
                 if is_ok:
                     comp = row_dict["Company Name"].replace(" ", "_")
@@ -165,7 +212,21 @@ else:
             status_text.empty()
             progress.empty()
 
-            excel_bytes = build_excel_bytes(rows)
+            # Nayi entries ko purani saved entries ke neeche cloud me permanently save karein
+            save_msg = ""
+            if new_rows_to_save:
+                with st.spinner("Nayi entries aapki master sheet me save ho rahi hain..."):
+                    save_res = call_backend({
+                        "action": "save_health_entries",
+                        "user_id": st.session_state.user_id,
+                        "rows": new_rows_to_save,
+                    })
+                if save_res.get("success"):
+                    st.session_state.saved_health_rows.extend(new_rows_to_save)
+                    save_msg = f"✅ {len(new_rows_to_save)} nayi entries '{DEFAULT_HEALTH_EXCEL_NAME}' me purani entries ke neeche save ho gayi!"
+                else:
+                    st.session_state.saved_health_rows.extend(new_rows_to_save)
+                    save_msg = f"⚠️ Cloud save me dikkat aayi ({save_res.get('message', '')}), par entries is session ki sheet me add ho gayi hain."
 
             all_zip_buf = io.BytesIO()
             with zipfile.ZipFile(all_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -184,12 +245,13 @@ else:
                 err_zip_bytes = err_zip_buf.getvalue()
 
             st.session_state["last_results"] = {
-                "rows": rows,
+                "batch_rows": batch_rows,
                 "done_count": len(done_files),
                 "error_count": len(error_files),
+                "skipped_count": skipped_count,
+                "save_msg": save_msg,
                 "error_details": error_details,
                 "debug_list": debug_list,
-                "excel_bytes": excel_bytes,
                 "all_zip_bytes": all_zip_bytes,
                 "err_zip_bytes": err_zip_bytes,
                 "timestamp": datetime.now(IST).strftime("%Y%m%d_%H%M"),
@@ -199,28 +261,22 @@ else:
             st.session_state.pdf_uploader_key += 1
             st.rerun()
 
-    # --- RESULTS & DOWNLOAD SECTION ---
+    # --- LAST BATCH SUMMARY (PDF ZIP & ERRORS) ---
     if "last_results" in st.session_state:
         res = st.session_state["last_results"]
         st.divider()
-        st.success("✅ Entry complete! Upar ka PDF box naye batch ke liye auto-clear ho gaya hai.")
+        if res.get("save_msg"):
+            st.success(res["save_msg"])
+        if res.get("skipped_count", 0) > 0:
+            st.info(f"ℹ️ {res['skipped_count']} duplicate policy pehle se saved thi, isliye dobara add nahi ki gayi.")
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("Total PDFs", res["done_count"] + res["error_count"])
+        m1.metric("Is Batch ki PDFs", res["done_count"] + res["error_count"])
         m2.metric("Done (YES) ✅", res["done_count"])
         m3.metric("Error (Check Karein) ❌", res["error_count"])
 
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            st.download_button(
-                "📥 Download Policy Entry Excel (.xlsx)",
-                data=res["excel_bytes"],
-                file_name=f"Health_Policy_Entry_{res['timestamp']}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True
-            )
-        with d2:
+        z1, z2 = st.columns(2)
+        with z1:
             st.download_button(
                 "📦 Download Sorted PDFs (Done + Error ZIP)",
                 data=res["all_zip_bytes"],
@@ -228,7 +284,7 @@ else:
                 mime="application/zip",
                 use_container_width=True
             )
-        with d3:
+        with z2:
             if res["err_zip_bytes"]:
                 st.download_button(
                     "⚠️ Download Only Error PDFs (ZIP)",
@@ -242,11 +298,58 @@ else:
             st.warning("Neeche di gayi PDFs me problem aayi — ye `Error` folder me alag kar di gayi hain:")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
-        st.subheader("📊 Extracted Policy Data Preview")
-        st.dataframe(pd.DataFrame(res["rows"]), use_container_width=True, hide_index=True)
+    # --- PERMANENT MASTER SHEET SECTION (OLD + NEW ENTRIES COMBINED) ---
+    st.divider()
+    saved_rows = st.session_state.saved_health_rows or []
 
+    sh1, sh2 = st.columns([3, 1])
+    with sh1:
+        st.subheader(f"📊 POLICY ENTRY SHEET FOR HEALTH (Total Saved: {len(saved_rows)})")
+    with sh2:
+        if st.button("🔄 Refresh Saved Sheet", use_container_width=True):
+            with st.spinner("Refresh ho raha hai..."):
+                loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
+                st.session_state.saved_health_rows = loaded_rows
+                if load_err:
+                    st.error(load_err)
+                else:
+                    st.rerun()
+
+    if saved_rows:
+        master_excel_bytes = build_excel_bytes(saved_rows)
+        st.download_button(
+            f"📥 Download {DEFAULT_HEALTH_EXCEL_NAME} ({len(saved_rows)} Entries)",
+            data=master_excel_bytes,
+            file_name=DEFAULT_HEALTH_EXCEL_NAME,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True
+        )
+        st.dataframe(pd.DataFrame(saved_rows, columns=OUTPUT_COLUMNS), use_container_width=True, hide_index=True)
+
+        with st.expander("🗑️ Nayi Sheet Shuru Karein (Purani Saved Entries Clear Karein)"):
+            st.warning("Dhyan dein: Clear karne se pehle upar se apni Excel download karke save kar lein.")
+            confirm_clear = st.checkbox("Haan, mujhe apni saari saved Health entries clear karni hain.")
+            if st.button("Clear Saved Health Sheet", disabled=not confirm_clear):
+                with st.spinner("Clear ho raha hai..."):
+                    clr_res = call_backend({
+                        "action": "clear_health_entries",
+                        "user_id": st.session_state.user_id,
+                    })
+                if clr_res.get("success"):
+                    st.session_state.saved_health_rows = []
+                    st.session_state.pop("last_results", None)
+                    st.success("Sheet clear ho gayi! Ab aap fresh entries shuru kar sakte hain.")
+                    st.rerun()
+                else:
+                    st.error(clr_res.get("message", "Clear karne me error aaya."))
+    else:
+        st.info("Abhi aapki saved Health sheet khali hai. Pehli baar PDF upload karte hi saari entries yahan save hone lagengi.")
+
+    # --- DEBUG MODE ---
+    if "last_results" in st.session_state:
         with st.expander("🐞 Debug Mode — Kisi bhi PDF ka Raw Text & Company Score Dekhein"):
-            debug_list = res.get("debug_list", [])
+            debug_list = st.session_state["last_results"].get("debug_list", [])
             if debug_list:
                 file_names = [d["file_name"] for d in debug_list]
                 selected_name = st.selectbox("Debug karne ke liye PDF chunein:", file_names)
