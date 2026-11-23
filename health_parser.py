@@ -12,7 +12,7 @@ from health_parsers.common import (
     lookup_client_master,
     build_excel_bytes,
     build_sample_master_bytes,
-)
+append_rows_to_local_excel,)
 
 
 def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
