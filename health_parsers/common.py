@@ -343,3 +343,119 @@ def build_sample_master_bytes() -> bytes:
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
+def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "", skip_duplicates: bool = True):
+    """
+    Fixed location wali local Excel (.xlsx) me purani entries ke neeche nayi entries directly save karta hai.
+    Returns (success, message, added_count, skipped_count, total_rows)
+    """
+    import os
+    import openpyxl
+
+    clean_path = str(file_path or "").strip().strip('"').strip("'")
+    if not clean_path:
+        return False, "Excel file ka path khali hai.", 0, 0, 0
+    if not clean_path.lower().endswith(".xlsx"):
+        return False, "Sirf .xlsx Excel file supported hai (path ke end me .xlsx hona chahiye).", 0, 0, 0
+
+    parent_dir = os.path.dirname(clean_path)
+    if parent_dir and not os.path.exists(parent_dir):
+        return False, f"Folder nahi mila: {parent_dir}", 0, 0, 0
+
+    try:
+        if os.path.exists(clean_path):
+            wb = openpyxl.load_workbook(clean_path)
+            if sheet_name and sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+            elif sheet_name:
+                ws = wb.create_sheet(title=sheet_name)
+            else:
+                ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = sheet_name or "Policy Entries"
+
+        existing_headers = [
+            str(ws.cell(row=1, column=c).value or "").strip()
+            for c in range(1, max(ws.max_column, 1) + 1)
+        ]
+        if not any(existing_headers):
+            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True)
+            for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
+                cell = ws.cell(row=1, column=col_idx, value=col_name)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                col_letter = cell.column_letter
+                ws.column_dimensions[col_letter].width = max(
+                    len(col_name) + 4,
+                    22 if col_name in {"Policy Number", "PYP Number"} else 16
+                )
+            col_map = {name.lower(): idx for idx, name in enumerate(OUTPUT_COLUMNS, start=1)}
+        else:
+            col_map = {}
+            for idx, h in enumerate(existing_headers, start=1):
+                if h:
+                    col_map[h.lower()] = idx
+            next_col = len(existing_headers) + 1
+            for col_name in OUTPUT_COLUMNS:
+                if col_name.lower() not in col_map:
+                    cell = ws.cell(row=1, column=next_col, value=col_name)
+                    cell.font = Font(bold=True)
+                    col_map[col_name.lower()] = next_col
+                    next_col += 1
+
+        last_row = 1
+        max_col = max(col_map.values())
+        for r in range(ws.max_row, 1, -1):
+            if any(ws.cell(row=r, column=c).value not in (None, "") for c in range(1, max_col + 1)):
+                last_row = r
+                break
+
+        existing_keys = set()
+        pno_col = col_map.get("policy number")
+        exp_col = col_map.get("expiry date")
+        if skip_duplicates and pno_col and last_row > 1:
+            for r in range(2, last_row + 1):
+                p_val = str(ws.cell(row=r, column=pno_col).value or "").strip().lstrip(",")
+                e_val = str(ws.cell(row=r, column=exp_col).value or "").strip() if exp_col else ""
+                if p_val:
+                    existing_keys.add((p_val, e_val))
+
+        added = 0
+        skipped = 0
+        write_row = last_row + 1
+
+        for row_dict in rows:
+            pno_norm = str(row_dict.get("Policy Number", "") or "").strip().lstrip(",")
+            exp_norm = str(row_dict.get("Expiry Date", "") or "").strip()
+            key = (pno_norm, exp_norm)
+
+            if skip_duplicates and pno_norm and key in existing_keys:
+                skipped += 1
+                continue
+
+            for col_name in OUTPUT_COLUMNS:
+                c_idx = col_map[col_name.lower()]
+                parsed_val, num_fmt = to_excel_value(col_name, row_dict.get(col_name, ""))
+                cell = ws.cell(row=write_row, column=c_idx, value=parsed_val)
+                if num_fmt == "@":
+                    cell.data_type = "s"
+                    cell.number_format = "@"
+                elif num_fmt:
+                    cell.number_format = num_fmt
+
+            if pno_norm:
+                existing_keys.add(key)
+            write_row += 1
+            added += 1
+
+        wb.save(clean_path)
+        total_entries = max(write_row - 2, 0)
+        return True, f"{added} nayi entries direct '{os.path.basename(clean_path)}' me save ho gayi!", added, skipped, total_entries
+
+    except PermissionError:
+        return False, "Excel file abhi MS Excel me khuli hui hai! Pehle Excel close karein aur dobara try karein.", 0, 0, 0
+    except Exception as e:
+        return False, f"Local Excel save error: {e}", 0, 0, 0
