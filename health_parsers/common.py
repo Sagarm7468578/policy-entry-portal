@@ -1,9 +1,11 @@
 import io
+import os
 import re
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pymupdf
 from pypdf import PdfReader
+import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -343,14 +345,13 @@ def build_sample_master_bytes() -> bytes:
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
+
+
 def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "", skip_duplicates: bool = True):
     """
     Fixed location wali local Excel (.xlsx) me purani entries ke neeche nayi entries directly save karta hai.
     Returns (success, message, added_count, skipped_count, total_rows)
     """
-    import os
-    import openpyxl
-
     clean_path = str(file_path or "").strip().strip('"').strip("'")
     if not clean_path:
         return False, "Excel file ka path khali hai.", 0, 0, 0
