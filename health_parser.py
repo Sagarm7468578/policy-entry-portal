@@ -782,6 +782,46 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
         return base_row, False, str(e), debug_info
 
 
+def to_excel_value(col_name: str, raw_val):
+    val = str(raw_val if raw_val is not None else "").strip()
+    if not val:
+        return "", None
+
+    # 1. Financial numeric columns -> Real Excel Number (int / float)
+    if col_name in {"Premium", "Sum Insured", "Share", "Share %"}:
+        cleaned = val.replace(",", "").replace("%", "").strip()
+        if re.fullmatch(r"-?\d+", cleaned):
+            return int(cleaned), "0"
+        if re.fullmatch(r"-?\d+\.\d+", cleaned):
+            return float(cleaned), "0.##"
+        return val, None
+
+    # 2. Mobile -> Real integer with "0" format (no green triangle, no .0, no E+09)
+    if col_name == "Mobile":
+        cleaned = re.sub(r"[\s\-]", "", val)
+        if re.fullmatch(r"[1-9]\d{6,14}", cleaned):
+            return int(cleaned), "0"
+        return val, "@"
+
+    # 3. Policy Number & PYP Number:
+    #    - 1 se 15 digits (bina leading 0) -> Real integer ("0" format)
+    #    - 16+ pure digits -> Aage ',' lagakar safe text (taaki Excel last digits 0000 na kare aur green triangle na aaye)
+    if col_name in {"Policy Number", "PYP Number"}:
+        if re.fullmatch(r"[1-9]\d{0,14}", val):
+            return int(val), "0"
+        if re.fullmatch(r"\d{16,}", val):
+            return f",{val}", "@"
+        return val, "@"
+
+    # 4. Client Code & Family Code
+    if col_name in {"Client Code", "Family code"}:
+        if re.fullmatch(r"[1-9]\d{0,14}", val):
+            return int(val), "0"
+        return val, "@"
+
+    return val, None
+
+
 def build_excel_bytes(rows: list) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -789,7 +829,6 @@ def build_excel_bytes(rows: list) -> bytes:
 
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
-    text_cols = {"Policy Number", "PYP Number", "Mobile", "Client Code", "Family code"}
 
     for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
@@ -799,29 +838,21 @@ def build_excel_bytes(rows: list) -> bytes:
 
     for r_idx, row_dict in enumerate(rows, start=2):
         for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
-            val = str(row_dict.get(col_name, "") or "")
-            cell = ws.cell(row=r_idx, column=col_idx, value=val)
-            if col_name in text_cols:
+            parsed_val, num_fmt = to_excel_value(col_name, row_dict.get(col_name, ""))
+            cell = ws.cell(row=r_idx, column=col_idx, value=parsed_val)
+            if num_fmt == "@":
                 cell.data_type = "s"
                 cell.number_format = "@"
+            elif num_fmt:
+                cell.number_format = num_fmt
 
     for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
         col_letter = ws.cell(row=1, column=col_idx).column_letter
-        ws.column_dimensions[col_letter].width = max(len(col_name) + 4, 16)
+        ws.column_dimensions[col_letter].width = max(
+            len(col_name) + 4,
+            22 if col_name in {"Policy Number", "PYP Number"} else 16
+        )
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-def build_sample_master_bytes() -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Client Master"
-    headers = ["Client Name", "Client Code", "Mobile", "Mail Id", "Sub agent", "Family code"]
-    ws.append(headers)
-    ws.append(["RAJESH SHARMA", "CL001", "9876543210", "rajesh@example.com", "AGENT A", "FAM01"])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
