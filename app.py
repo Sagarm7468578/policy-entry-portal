@@ -31,6 +31,9 @@ if "logged_in" not in st.session_state:
     st.session_state.user_id = ""
     st.session_state.expiry = ""
 
+if "pdf_uploader_key" not in st.session_state:
+    st.session_state.pdf_uploader_key = 0
+
 
 # --- LOGIN SCREEN ---
 if not st.session_state.logged_in:
@@ -84,6 +87,7 @@ else:
         if st.button("Logout", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.user_id = ""
+            st.session_state.pop("last_results", None)
             st.rerun()
 
     st.title("📄 Automatic Policy Entry Portal (24x7)")
@@ -98,15 +102,24 @@ else:
         st.subheader("1️⃣ Client Master (Optional)")
         master_file = st.file_uploader(
             "Apni Client Master Excel/CSV upload karein (Client Code, Mobile, Mail Id, Sub agent, Family code ke liye)",
-            type=["xlsx", "csv"]
+            type=["xlsx", "csv"],
+            key="client_master_uploader"
         )
 
     with col_right:
-        st.subheader("2️⃣ Policy PDFs Upload Karein")
+        hdr1, hdr2 = st.columns([3, 1])
+        with hdr1:
+            st.subheader("2️⃣ Policy PDFs Upload Karein")
+        with hdr2:
+            if st.button("🗑️ Clear All PDFs", use_container_width=True):
+                st.session_state.pdf_uploader_key += 1
+                st.rerun()
+
         uploaded_pdfs = st.file_uploader(
             "Ek ya ek se zyada Health Policy PDF select karein",
             type=["pdf"],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            key=f"pdf_uploader_{st.session_state.pdf_uploader_key}"
         )
 
     if st.button("🚀 Start Policy Entry", type="primary", use_container_width=True):
@@ -116,6 +129,7 @@ else:
             master_df = None
             if master_file is not None:
                 try:
+                    master_file.seek(0)
                     if master_file.name.lower().endswith(".csv"):
                         master_df = pd.read_csv(master_file, dtype=str)
                     else:
@@ -181,10 +195,15 @@ else:
                 "timestamp": datetime.now(IST).strftime("%Y%m%d_%H%M"),
             }
 
+            # Entry complete hote hi PDF box auto-clear (Client Master wahi rahega)
+            st.session_state.pdf_uploader_key += 1
+            st.rerun()
+
     # --- RESULTS & DOWNLOAD SECTION ---
     if "last_results" in st.session_state:
         res = st.session_state["last_results"]
         st.divider()
+        st.success("✅ Entry complete! Upar ka PDF box naye batch ke liye auto-clear ho gaya hai.")
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Total PDFs", res["done_count"] + res["error_count"])
