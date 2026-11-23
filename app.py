@@ -1,4 +1,6 @@
 import io
+import json
+import os
 import zipfile
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -9,6 +11,7 @@ from health_parser import (
     process_health_pdf,
     build_excel_bytes,
     build_sample_master_bytes,
+    append_rows_to_local_excel,
 )
 
 st.set_page_config(page_title="Policy Entry Portal", page_icon="📄", layout="wide")
@@ -18,6 +21,8 @@ SECRET_KEY = st.secrets["SECRET_KEY"]
 IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_HEALTH_EXCEL_NAME = "POLICY ENTRY SHEET FOR HEALTH.xlsx"
 MAX_PDF_ROUNDS = 5
+IS_CLOUD = os.path.exists("/mount/src")
+LOCAL_CONFIG_FILE = "mode2_local_config.json"
 
 
 def call_backend(payload):
@@ -36,6 +41,47 @@ def load_saved_health_rows(user_id):
     return [], res.get("message", "Saved data load nahi ho paya.")
 
 
+def load_user_mode2_settings(user_id):
+    res = call_backend({"action": "get_user_settings", "user_id": user_id})
+    if res.get("success"):
+        return res.get("fixed_sheet_url", ""), res.get("fixed_sheet_tab", "Policy Entries")
+    return "", "Policy Entries"
+
+
+def save_user_mode2_settings(user_id, sheet_url, sheet_tab):
+    return call_backend({
+        "action": "save_user_settings",
+        "user_id": user_id,
+        "fixed_sheet_url": sheet_url.strip(),
+        "fixed_sheet_tab": sheet_tab.strip() or "Policy Entries",
+    })
+
+
+def load_local_excel_path():
+    if IS_CLOUD or not os.path.exists(LOCAL_CONFIG_FILE):
+        return "", "Policy Entries"
+    try:
+        with open(LOCAL_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return cfg.get("local_excel_path", ""), cfg.get("local_sheet_name", "Policy Entries")
+    except Exception:
+        return "", "Policy Entries"
+
+
+def save_local_excel_path(path_str, sheet_name):
+    if IS_CLOUD:
+        return
+    try:
+        with open(LOCAL_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                {"local_excel_path": path_str.strip(), "local_sheet_name": sheet_name.strip() or "Policy Entries"},
+                f,
+                indent=2,
+            )
+    except Exception:
+        pass
+
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_id = ""
@@ -52,6 +98,13 @@ if "batch_history" not in st.session_state:
 
 if "round_counter" not in st.session_state:
     st.session_state.round_counter = 0
+
+if "mode2_settings_loaded" not in st.session_state:
+    st.session_state.mode2_settings_loaded = False
+    st.session_state.fixed_sheet_url = ""
+    st.session_state.fixed_sheet_tab = "Policy Entries"
+    st.session_state.local_excel_path = ""
+    st.session_state.local_sheet_name = "Policy Entries"
 
 
 # --- LOGIN SCREEN ---
@@ -81,6 +134,7 @@ if not st.session_state.logged_in:
                         st.session_state.user_id = user_id.strip()
                         st.session_state.expiry = result.get("expiry", "")
                         st.session_state.saved_health_rows = None
+                        st.session_state.mode2_settings_loaded = False
                         st.session_state.batch_history = []
                         st.session_state.round_counter = 0
                         st.rerun()
@@ -93,6 +147,18 @@ else:
     with st.sidebar:
         st.success(f"👤 User: **{st.session_state.user_id}**")
         st.info(f"📅 Plan Valid Till: **{st.session_state.expiry}**")
+        st.divider()
+
+        working_mode = st.radio(
+            "⚙️ Working Mode Chunein",
+            [
+                "Mode 1: Cloud Portal (Excel Download)",
+                "Mode 2: Fixed Excel / Sheet Auto-Entry (No Download)",
+            ],
+            index=0,
+        )
+        is_mode2 = working_mode.startswith("Mode 2")
+
         st.divider()
         policy_category = st.selectbox(
             "Policy Type Chunein",
@@ -110,6 +176,7 @@ else:
             st.session_state.logged_in = False
             st.session_state.user_id = ""
             st.session_state.saved_health_rows = None
+            st.session_state.mode2_settings_loaded = False
             st.session_state.batch_history = []
             st.session_state.round_counter = 0
             st.session_state.pop("last_results", None)
@@ -121,7 +188,7 @@ else:
         st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein.")
         st.stop()
 
-    # Login ke baad pehli baar user ki purani saved entries cloud se load karein
+    # Load Mode 1 saved rows once
     if st.session_state.saved_health_rows is None:
         with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
             loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
@@ -129,6 +196,103 @@ else:
             if load_err:
                 st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
 
+    # Load Mode 2 saved settings once
+    if not st.session_state.mode2_settings_loaded:
+        s_url, s_tab = load_user_mode2_settings(st.session_state.user_id)
+        l_path, l_tab = load_local_excel_path()
+        st.session_state.fixed_sheet_url = s_url
+        st.session_state.fixed_sheet_tab = s_tab
+        st.session_state.local_excel_path = l_path
+        st.session_state.local_sheet_name = l_tab
+        st.session_state.mode2_settings_loaded = True
+
+    # --- MODE 2 CONFIGURATION PANEL ---
+    mode2_target_type = "google_sheet"
+    if is_mode2:
+        with st.container(border=True):
+            st.subheader("🎯 Mode 2 Setup — Fixed Location Auto-Entry (Zero Download)")
+
+            target_options = ["☁️ Fixed Google Sheet (Online Website par 24x7 chalega)"]
+            if not IS_CLOUD:
+                target_options.insert(0, "💻 Direct Local PC Excel (.xlsx) — Seedha PC File me Entry")
+
+            chosen_target = st.radio(
+                "Entry kahan directly save karni hai?",
+                target_options,
+                horizontal=True,
+            )
+
+            if chosen_target.startswith("💻"):
+                mode2_target_type = "local_excel"
+                c_p1, c_p2, c_p3 = st.columns([3, 1.2, 1])
+                with c_p1:
+                    local_path_input = st.text_input(
+                        "Fixed Excel File Path (.xlsx)",
+                        value=st.session_state.local_excel_path,
+                        placeholder=r"e.g. I:\My Drive\POLICY ENTRY EXCEL\POLICY ENTRY SHEET FOR HEALTH.xlsx",
+                    )
+                with c_p2:
+                    local_tab_input = st.text_input(
+                        "Sheet Tab Name",
+                        value=st.session_state.local_sheet_name,
+                        placeholder="Policy Entries",
+                    )
+                with c_p3:
+                    st.write("")
+                    st.write("")
+                    if st.button("💾 Save Path", use_container_width=True):
+                        st.session_state.local_excel_path = local_path_input.strip().strip('"')
+                        st.session_state.local_sheet_name = local_tab_input.strip() or "Policy Entries"
+                        save_local_excel_path(st.session_state.local_excel_path, st.session_state.local_sheet_name)
+                        st.success("Fixed Excel path save ho gaya!")
+
+                st.session_state.local_excel_path = local_path_input.strip().strip('"')
+                st.session_state.local_sheet_name = local_tab_input.strip() or "Policy Entries"
+
+                if st.session_state.local_excel_path and os.path.exists(st.session_state.local_excel_path):
+                    st.caption(f"✅ File mil gayi: `{st.session_state.local_excel_path}` — Nayi entries purani entry ke turant neeche judengi (Excel band rakhna zaroori hai).")
+                elif st.session_state.local_excel_path:
+                    st.caption(f"🆕 Nayi file is path par pehli entry ke saath apne aap ban jayegi: `{st.session_state.local_excel_path}`")
+            else:
+                mode2_target_type = "google_sheet"
+                c_g1, c_g2, c_g3 = st.columns([3, 1.2, 1])
+                with c_g1:
+                    sheet_url_input = st.text_input(
+                        "Apni Fixed Google Sheet ka URL ya Sheet ID dalein",
+                        value=st.session_state.fixed_sheet_url,
+                        placeholder="https://docs.google.com/spreadsheets/d/xxxxx/edit",
+                    )
+                with c_g2:
+                    sheet_tab_input = st.text_input(
+                        "Sheet Tab Name",
+                        value=st.session_state.fixed_sheet_tab,
+                        placeholder="Policy Entries",
+                    )
+                with c_g3:
+                    st.write("")
+                    st.write("")
+                    if st.button("💾 Save Sheet Link", use_container_width=True):
+                        st.session_state.fixed_sheet_url = sheet_url_input.strip()
+                        st.session_state.fixed_sheet_tab = sheet_tab_input.strip() or "Policy Entries"
+                        s_res = save_user_mode2_settings(
+                            st.session_state.user_id,
+                            st.session_state.fixed_sheet_url,
+                            st.session_state.fixed_sheet_tab,
+                        )
+                        if s_res.get("success"):
+                            st.success("Fixed Sheet link save ho gaya!")
+                        else:
+                            st.error(s_res.get("message", "Save nahi ho paya."))
+
+                st.session_state.fixed_sheet_url = sheet_url_input.strip()
+                st.session_state.fixed_sheet_tab = sheet_tab_input.strip() or "Policy Entries"
+
+                if st.session_state.fixed_sheet_url:
+                    st.link_button("🔗 Apni Fixed Google Sheet Kholen", st.session_state.fixed_sheet_url)
+                if IS_CLOUD:
+                    st.caption("💡 Online website se seedha Google Sheet me bina download ke live entry hoti hai. PC ki local `.xlsx` file me direct entry ke liye isi app ko local PC par `.bat` se chalayein.")
+
+    # --- UPLOAD SECTION ---
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
@@ -160,9 +324,19 @@ else:
         value=True
     )
 
-    if st.button("🚀 Start Policy Entry", type="primary", use_container_width=True):
+    btn_label = (
+        "🚀 Start Policy Entry (Mode 2: Direct Fixed Excel/Sheet me Save Karein)"
+        if is_mode2
+        else "🚀 Start Policy Entry (Mode 1: Cloud Portal)"
+    )
+
+    if st.button(btn_label, type="primary", use_container_width=True):
         if not uploaded_pdfs:
             st.warning("Pehle kam se kam ek Policy PDF upload karein.")
+        elif is_mode2 and mode2_target_type == "google_sheet" and not st.session_state.fixed_sheet_url:
+            st.warning("Mode 2 ke liye pehle upar apni Fixed Google Sheet ka URL ya Sheet ID dalein.")
+        elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
+            st.warning("Mode 2 ke liye pehle upar apni Fixed Local Excel (.xlsx) file ka path dalein.")
         else:
             master_df = None
             if master_file is not None:
@@ -175,20 +349,11 @@ else:
                 except Exception as e:
                     st.warning(f"Client Master read nahi ho payi ({e}). Bina master ke entry kar rahe hain.")
 
-            existing_keys = set()
-            for r in (st.session_state.saved_health_rows or []):
-                pno = str(r.get("Policy Number", "")).strip()
-                exp = str(r.get("Expiry Date", "")).strip()
-                if pno:
-                    existing_keys.add((pno, exp))
-
-            new_rows_to_save = []
-            batch_rows = []
+            extracted_rows = []
             done_files = []
             error_files = []
             error_details = []
             debug_list = []
-            skipped_count = 0
 
             progress = st.progress(0)
             status_text = st.empty()
@@ -198,18 +363,7 @@ else:
                 pdf_bytes = pdf.read()
                 row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df)
                 debug_list.append(debug_info)
-
-                pno = str(row_dict.get("Policy Number", "")).strip()
-                exp = str(row_dict.get("Expiry Date", "")).strip()
-                key = (pno, exp)
-
-                if skip_duplicates and pno and key in existing_keys:
-                    skipped_count += 1
-                else:
-                    batch_rows.append(row_dict)
-                    new_rows_to_save.append(row_dict)
-                    if pno:
-                        existing_keys.add(key)
+                extracted_rows.append(row_dict)
 
                 if is_ok:
                     comp = row_dict["Company Name"].replace(" ", "_")
@@ -223,21 +377,84 @@ else:
             status_text.empty()
             progress.empty()
 
-            # Nayi entries ko purani saved entries ke neeche cloud me permanently save karein
             save_msg = ""
-            if new_rows_to_save:
-                with st.spinner("Nayi entries aapki master sheet me save ho rahi hain..."):
-                    save_res = call_backend({
-                        "action": "save_health_entries",
-                        "user_id": st.session_state.user_id,
-                        "rows": new_rows_to_save,
-                    })
-                if save_res.get("success"):
-                    st.session_state.saved_health_rows.extend(new_rows_to_save)
-                    save_msg = f"✅ {len(new_rows_to_save)} nayi entries '{DEFAULT_HEALTH_EXCEL_NAME}' me purani entries ke neeche save ho gayi!"
+            save_error = ""
+            skipped_count = 0
+
+            # --- SAVE LOGIC: MODE 2 vs MODE 1 ---
+            if is_mode2:
+                if mode2_target_type == "local_excel":
+                    save_local_excel_path(st.session_state.local_excel_path, st.session_state.local_sheet_name)
+                    with st.spinner("Fixed Local Excel (.xlsx) me purani entry ke neeche save ho raha hai..."):
+                        ok, msg, added, skipped, total_cnt = append_rows_to_local_excel(
+                            st.session_state.local_excel_path,
+                            extracted_rows,
+                            sheet_name=st.session_state.local_sheet_name,
+                            skip_duplicates=skip_duplicates,
+                        )
+                    skipped_count = skipped
+                    if ok:
+                        save_msg = f"✅ Mode 2 Direct Save: {msg} (Total Entries in Excel: {total_cnt}) — Download ki zaroorat nahi!"
+                    else:
+                        save_error = f"❌ {msg}"
                 else:
-                    st.session_state.saved_health_rows.extend(new_rows_to_save)
-                    save_msg = f"⚠️ Cloud save me dikkat aayi ({save_res.get('message', '')}), par entries is session ki sheet me add ho gayi hain."
+                    save_user_mode2_settings(
+                        st.session_state.user_id,
+                        st.session_state.fixed_sheet_url,
+                        st.session_state.fixed_sheet_tab,
+                    )
+                    with st.spinner("Aapki Fixed Google Sheet me purani entry ke neeche direct save ho raha hai..."):
+                        g_res = call_backend({
+                            "action": "append_to_fixed_sheet",
+                            "user_id": st.session_state.user_id,
+                            "sheet_url": st.session_state.fixed_sheet_url,
+                            "sheet_tab": st.session_state.fixed_sheet_tab,
+                            "skip_duplicates": skip_duplicates,
+                            "rows": extracted_rows,
+                        })
+                    if g_res.get("success"):
+                        skipped_count = g_res.get("skipped", 0)
+                        added_cnt = g_res.get("added", 0)
+                        s_name = g_res.get("sheet_name", "Fixed Sheet")
+                        t_name = g_res.get("tab_name", st.session_state.fixed_sheet_tab)
+                        tot_cnt = g_res.get("total_rows", "")
+                        save_msg = f"✅ Mode 2 Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt}) — Download ki zaroorat nahi!"
+                    else:
+                        save_error = f"❌ Fixed Google Sheet save fail: {g_res.get('message', 'Unknown error')}"
+            else:
+                # MODE 1 (Original Cloud Save + Download Excel)
+                existing_keys = set()
+                for r in (st.session_state.saved_health_rows or []):
+                    pno = str(r.get("Policy Number", "")).strip().lstrip(",")
+                    exp = str(r.get("Expiry Date", "")).strip()
+                    if pno:
+                        existing_keys.add((pno, exp))
+
+                new_rows_to_save = []
+                for row_dict in extracted_rows:
+                    pno = str(row_dict.get("Policy Number", "")).strip().lstrip(",")
+                    exp = str(row_dict.get("Expiry Date", "")).strip()
+                    key = (pno, exp)
+                    if skip_duplicates and pno and key in existing_keys:
+                        skipped_count += 1
+                    else:
+                        new_rows_to_save.append(row_dict)
+                        if pno:
+                            existing_keys.add(key)
+
+                if new_rows_to_save:
+                    with st.spinner("Nayi entries aapki Mode 1 master sheet me save ho rahi hain..."):
+                        save_res = call_backend({
+                            "action": "save_health_entries",
+                            "user_id": st.session_state.user_id,
+                            "rows": new_rows_to_save,
+                        })
+                    if save_res.get("success"):
+                        st.session_state.saved_health_rows.extend(new_rows_to_save)
+                        save_msg = f"✅ {len(new_rows_to_save)} nayi entries '{DEFAULT_HEALTH_EXCEL_NAME}' me purani entries ke neeche save ho gayi!"
+                    else:
+                        st.session_state.saved_health_rows.extend(new_rows_to_save)
+                        save_msg = f"⚠️ Cloud save me dikkat aayi ({save_res.get('message', '')}), par entries is session ki sheet me add ho gayi hain."
 
             all_zip_buf = io.BytesIO()
             with zipfile.ZipFile(all_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -263,6 +480,7 @@ else:
 
             batch_record = {
                 "round_no": round_no,
+                "mode_used": "Mode 2" if is_mode2 else "Mode 1",
                 "timestamp": ts_file,
                 "time_display": ts_display,
                 "total_count": len(done_files) + len(error_files),
@@ -270,18 +488,18 @@ else:
                 "error_count": len(error_files),
                 "skipped_count": skipped_count,
                 "save_msg": save_msg,
+                "save_error": save_error,
+                "batch_rows": extracted_rows,
                 "error_details": error_details,
                 "debug_list": debug_list,
                 "all_zip_bytes": all_zip_bytes,
                 "err_zip_bytes": err_zip_bytes,
             }
 
-            # Last 5 rounds ki history rakhein (sabse naya sabse upar)
             st.session_state.batch_history.insert(0, batch_record)
             st.session_state.batch_history = st.session_state.batch_history[:MAX_PDF_ROUNDS]
             st.session_state["last_results"] = batch_record
 
-            # Entry complete hote hi PDF box auto-clear (Client Master wahi rahega)
             st.session_state.pdf_uploader_key += 1
             st.rerun()
 
@@ -289,12 +507,14 @@ else:
     if "last_results" in st.session_state:
         res = st.session_state["last_results"]
         st.divider()
-        if res.get("save_msg"):
+        if res.get("save_error"):
+            st.error(res["save_error"])
+        elif res.get("save_msg"):
             st.success(res["save_msg"])
         if res.get("skipped_count", 0) > 0:
             st.info(f"ℹ️ {res['skipped_count']} duplicate policy pehle se saved thi, isliye dobara add nahi ki gayi.")
 
-        st.subheader(f"⚡ Latest Round #{res['round_no']} ({res['time_display']})")
+        st.subheader(f"⚡ Latest Round #{res['round_no']} [{res.get('mode_used', 'Mode 1')}] ({res['time_display']})")
         m1, m2, m3 = st.columns(3)
         m1.metric("Is Round ki PDFs", res["total_count"])
         m2.metric("Done (YES) ✅", res["done_count"])
@@ -325,18 +545,22 @@ else:
             st.warning("Neeche di gayi PDFs me problem aayi — ye `Error` folder me alag kar di gayi hain:")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
+        if is_mode2 and res.get("batch_rows"):
+            st.subheader("📋 Is Round me Add Hui Entries (Preview)")
+            st.dataframe(pd.DataFrame(res["batch_rows"], columns=OUTPUT_COLUMNS), use_container_width=True, hide_index=True)
+
     # --- LAST 5 ROUNDS PDF DOWNLOAD HISTORY ---
     if st.session_state.batch_history:
         with st.expander(
             f"🗂️ Last {len(st.session_state.batch_history)} Rounds PDF Download History (Max {MAX_PDF_ROUNDS} Rounds)",
             expanded=(len(st.session_state.batch_history) > 1)
         ):
-            st.caption("Purane rounds ki Done / Error PDFs yahan se kabhi bhi download kar sakte hain (jab tak browser tab khula hai / logout nahi karte).")
+            st.caption("Purane rounds ki Done / Error PDFs yahan se kabhi bhi download kar sakte hain.")
             for b in st.session_state.batch_history:
                 c_info, c_all, c_err = st.columns([2.5, 1.5, 1.5])
                 with c_info:
                     st.markdown(
-                        f"**Round #{b['round_no']}** — `{b['time_display']}`  \n"
+                        f"**Round #{b['round_no']} ({b.get('mode_used', 'Mode 1')})** — `{b['time_display']}`  \n"
                         f"Total: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**"
                     )
                 with c_all:
@@ -362,55 +586,56 @@ else:
                         st.caption("No Error PDFs ✅")
                 st.divider()
 
-    # --- PERMANENT MASTER SHEET SECTION (OLD + NEW ENTRIES COMBINED) ---
-    st.divider()
-    saved_rows = st.session_state.saved_health_rows or []
+    # --- MODE 1 PERMANENT MASTER SHEET SECTION ---
+    if not is_mode2:
+        st.divider()
+        saved_rows = st.session_state.saved_health_rows or []
 
-    sh1, sh2 = st.columns([3, 1])
-    with sh1:
-        st.subheader(f"📊 POLICY ENTRY SHEET FOR HEALTH (Total Saved: {len(saved_rows)})")
-    with sh2:
-        if st.button("🔄 Refresh Saved Sheet", use_container_width=True):
-            with st.spinner("Refresh ho raha hai..."):
-                loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
-                st.session_state.saved_health_rows = loaded_rows
-                if load_err:
-                    st.error(load_err)
-                else:
-                    st.rerun()
+        sh1, sh2 = st.columns([3, 1])
+        with sh1:
+            st.subheader(f"📊 POLICY ENTRY SHEET FOR HEALTH (Total Saved: {len(saved_rows)})")
+        with sh2:
+            if st.button("🔄 Refresh Saved Sheet", use_container_width=True):
+                with st.spinner("Refresh ho raha hai..."):
+                    loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
+                    st.session_state.saved_health_rows = loaded_rows
+                    if load_err:
+                        st.error(load_err)
+                    else:
+                        st.rerun()
 
-    if saved_rows:
-        master_excel_bytes = build_excel_bytes(saved_rows)
-        st.download_button(
-            f"📥 Download {DEFAULT_HEALTH_EXCEL_NAME} ({len(saved_rows)} Entries)",
-            data=master_excel_bytes,
-            file_name=DEFAULT_HEALTH_EXCEL_NAME,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True
-        )
-        st.dataframe(pd.DataFrame(saved_rows, columns=OUTPUT_COLUMNS), use_container_width=True, hide_index=True)
+        if saved_rows:
+            master_excel_bytes = build_excel_bytes(saved_rows)
+            st.download_button(
+                f"📥 Download {DEFAULT_HEALTH_EXCEL_NAME} ({len(saved_rows)} Entries)",
+                data=master_excel_bytes,
+                file_name=DEFAULT_HEALTH_EXCEL_NAME,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+            st.dataframe(pd.DataFrame(saved_rows, columns=OUTPUT_COLUMNS), use_container_width=True, hide_index=True)
 
-        with st.expander("🗑️ Nayi Sheet Shuru Karein (Purani Saved Entries Clear Karein)"):
-            st.warning("Dhyan dein: Clear karne se pehle upar se apni Excel download karke save kar lein.")
-            confirm_clear = st.checkbox("Haan, mujhe apni saari saved Health entries clear karni hain.")
-            if st.button("Clear Saved Health Sheet", disabled=not confirm_clear):
-                with st.spinner("Clear ho raha hai..."):
-                    clr_res = call_backend({
-                        "action": "clear_health_entries",
-                        "user_id": st.session_state.user_id,
-                    })
-                if clr_res.get("success"):
-                    st.session_state.saved_health_rows = []
-                    st.session_state.pop("last_results", None)
-                    st.success("Sheet clear ho gayi! Ab aap fresh entries shuru kar sakte hain.")
-                    st.rerun()
-                else:
-                    st.error(clr_res.get("message", "Clear karne me error aaya."))
-    else:
-        st.info("Abhi aapki saved Health sheet khali hai. Pehli baar PDF upload karte hi saari entries yahan save hone lagengi.")
+            with st.expander("🗑️ Nayi Sheet Shuru Karein (Purani Saved Entries Clear Karein)"):
+                st.warning("Dhyan dein: Clear karne se pehle upar se apni Excel download karke save kar lein.")
+                confirm_clear = st.checkbox("Haan, mujhe apni saari saved Health entries clear karni hain.")
+                if st.button("Clear Saved Health Sheet", disabled=not confirm_clear):
+                    with st.spinner("Clear ho raha hai..."):
+                        clr_res = call_backend({
+                            "action": "clear_health_entries",
+                            "user_id": st.session_state.user_id,
+                        })
+                    if clr_res.get("success"):
+                        st.session_state.saved_health_rows = []
+                        st.session_state.pop("last_results", None)
+                        st.success("Sheet clear ho gayi! Ab aap fresh entries shuru kar sakte hain.")
+                        st.rerun()
+                    else:
+                        st.error(clr_res.get("message", "Clear karne me error aaya."))
+        else:
+            st.info("Abhi aapki saved Health sheet khali hai. Pehli baar PDF upload karte hi saari entries yahan save hone lagengi.")
 
-    # --- DEBUG MODE (FIXED: INSTANT TEXT SWITCH + FULL COPYABLE TEXT + LAST 5 ROUNDS) ---
+    # --- DEBUG MODE ---
     if st.session_state.batch_history:
         with st.expander("🐞 Debug Mode — Kisi bhi PDF ka Full Raw Text & Company Score Dekhein"):
             round_options = [
@@ -454,7 +679,6 @@ else:
                     key=f"debug_dl_{chosen_batch['round_no']}_{selected_pdf_idx}"
                 )
 
-                # Dynamic key ki wajah se har baar naam badalne par turant ussi PDF ka FULL text load hoga
                 st.text_area(
                     f"Full Extracted PDF Text ({len(raw_txt)} characters) — Ctrl+A, Ctrl+C se copy karein:",
                     value=raw_txt,
