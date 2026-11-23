@@ -107,6 +107,9 @@ def clean_person_name(name: str) -> str:
 
 def extract_generic_agency(pdf_text: str) -> str:
     patterns = [
+        # New India / PSU multi-line format:
+        # Name of the \n Agent/Intermediary/CPSC \n User \n Mrs. SONAL LADDHA \n (NIAAG00134008)
+        r"(?i)Name\s+of\s+(?:the\s+)?[\r\n\s]*(?:Agent|Intermediary|Broker|Advisor|POSP)(?:[/\s]*(?:Agent|Intermediary|Broker|Advisor|POSP|CPSC|User|IMD|Direct))*[\s:\-\r\n]+([^\r\n]{3,70})",
         # Care Health stacked format: Intermediary Details \n Name \n Code \n Contact Details \n <Name>
         r"(?i)Intermediary\s*Details\s*[\r\n]+\s*Name\s*[\r\n]+\s*Code\s*[\r\n]+\s*Contact\s*(?:Details|Number|No\.?)\s*[\r\n]+\s*([^\r\n]{3,60})",
         # Care Health / General stacked 2-col format: Intermediary Details \n Name \n Code \n <Name>
@@ -119,21 +122,24 @@ def extract_generic_agency(pdf_text: str) -> str:
         r"(?i)Agent/Intermediary Contact No\.[\s\r\n]+([A-Za-z\s]+?)\s+[A-Z0-9]{5,20}\s+\d{8,15}",
         # General inline formats (colon optional, slash supported)
         r"(?i)(?:Intermediary|Agent|Broker|IMD|Advisor|POSP|Channel\s*Partner|Partner)(?:\s*/\s*(?:Intermediary|Agent|Broker|Advisor|POSP))?\s*Name\s*[:\-]?\s*([^\r\n]{3,65})",
-        r"(?i)Name\s*of\s*(?:the\s*)?(?:Intermediary|Agent|Broker|Advisor|POSP)\s*[:\-]?\s*([^\r\n]{3,65})",
         # Value on immediate next line after label
         r"(?i)(?:Intermediary|Agent|Broker|Advisor)\s*Name\s*[:\-]?\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
     ]
     bad_starts = (
         "intermediary", "agent", "broker", "advisor", "code", "contact",
-        "mobile", "email", "phone", "license", "details", "number", "no", "id", "address"
+        "mobile", "email", "phone", "license", "details", "number", "no", "id", "address", "user", "cpsc"
     )
     for pat in patterns:
         for m in re.finditer(pat, pdf_text):
             raw = m.group(1)
+            # Bracket me likha code (jaise (NIAAG00134008)) hatayein
+            raw = re.sub(r"\([^)]*\)", "", raw)
             val = re.split(
                 r"(?i)\b(?:Intermediary|Agent|Broker|Code|Contact|Mobile|Email|Phone|License|ID|No\.|Number|Address|Branch|Location)\b",
                 raw,
             )[0]
+            # Title (Mr./Mrs./Ms./Smt./Shri./Dr.) hatayein
+            val = re.sub(r"(?i)^\s*((?:MRS|MISS|MR|MS|DR|SMT|SHRI)(?:\.|\b)\s*)+", "", val)
             val = re.sub(r"[^A-Za-z0-9\s.&/-]", "", val)
             val = re.sub(r"\s+", " ", val).strip(" .:-_/")
             if len(val) >= 3 and not val.isdigit():
