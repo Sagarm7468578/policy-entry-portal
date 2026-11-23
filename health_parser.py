@@ -13,7 +13,7 @@ OUTPUT_COLUMNS = [
     "Client Name", "Client Code", "Mobile", "Mail Id", "Policy Number",
     "Insurance Type", "Sub Type", "Company Name", "Agency", "Sub agent",
     "Plan Name", "Premium", "Sum Insured", "Inception Date", "Expiry Date",
-    "Reminder Date", "Premium Mode", "Policy Status", "Remark", "Folder",
+    "Reminder Date", "Premium Mode", "Policy Status", "Remark",
     "PYP Number", "Share", "Share %", "Family code", "Date of Entry",
     "DOB", "OUR RENEWAL"
 ]
@@ -113,23 +113,56 @@ def extract_generic_agency(pdf_text: str) -> str:
         r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
         # TATA AIG format
         r"(?i)Agent/Intermediary Contact No\.[\s\r\n]+([A-Za-z\s]+?)\s+[A-Z0-9]{5,20}\s+\d{8,15}",
-        # Standard inline format with colon/dash
-        r"(?i)(?:Intermediary|Agent|Broker|IMD|Advisor|POSP)\s*Name\s*[:\-]\s*([^\r\n]{3,60})",
-        r"(?i)Name\s*of\s*(?:Intermediary|Agent|Broker|Advisor)\s*[:\-]\s*([^\r\n]{3,60})",
+        # Care Health & general inline formats (colon optional, slash supported)
+        r"(?i)(?:Intermediary|Agent|Broker|IMD|Advisor|POSP|Channel\s*Partner|Partner)(?:\s*/\s*(?:Intermediary|Agent|Broker|Advisor|POSP))?\s*Name\s*[:\-]?\s*([^\r\n]{3,65})",
+        r"(?i)Name\s*of\s*(?:the\s*)?(?:Intermediary|Agent|Broker|Advisor|POSP)\s*[:\-]?\s*([^\r\n]{3,65})",
+        # Value on immediate next line after label
+        r"(?i)(?:Intermediary|Agent|Broker|Advisor)\s*Name\s*[:\-]?\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
     ]
+    bad_starts = (
+        "intermediary", "agent", "broker", "advisor", "code", "contact",
+        "mobile", "email", "phone", "license", "details", "number", "no", "id", "address"
+    )
     for pat in patterns:
-        m = re.search(pat, pdf_text)
-        if m:
-            val = re.split(r"(?i)\b(?:Code|Contact|Mobile|Email|Phone|License|ID|No\.)\b", m.group(1))[0]
+        for m in re.finditer(pat, pdf_text):
+            raw = m.group(1)
+            val = re.split(
+                r"(?i)\b(?:Intermediary|Agent|Broker|Code|Contact|Mobile|Email|Phone|License|ID|No\.|Number|Address|Branch|Location)\b",
+                raw,
+            )[0]
             val = re.sub(r"[^A-Za-z0-9\s.&/-]", "", val)
-            val = re.sub(r"\s+", " ", val).strip()
+            val = re.sub(r"\s+", " ", val).strip(" .:-_/")
             if len(val) >= 3 and not val.isdigit():
-                return val.upper()
+                first_word = val.split()[0].lower()
+                if first_word not in bad_starts:
+                    return val.upper()
     return ""
 
 
 def extract_premium_mode(pdf_text: str) -> str:
-    """Payment Details / Instrument Details se payment mode (CHEQUE / ONLINE / CASH / AUTO DEBIT) nikalta hai."""
+    """Payment Details / Instrument Details / Mode of Payment se payment mode (CHEQUE / ONLINE / CASH / AUTO DEBIT) nikalta hai."""
+    # 1. Explicit Mode of Payment / Payment Mode label (supports colon, space, or next line)
+    m_mode = re.search(
+        r"(?i)(?:Mode\s*of\s*Payment|Payment\s*Mode|Payment\s*Method)\s*[:\-]?\s*[\r\n]?\s*(IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|Web|BillDesk|Razorpay|PayU|Cheque|Chq\.?|DD|Demand\s*Draft|Cash|Auto\s*Debit|ECS|NACH|Standing\s*Instruction)\b",
+        pdf_text,
+    )
+    if m_mode:
+        val = re.sub(r"\s+", " ", m_mode.group(1).strip().upper())
+        if val in {
+            "IPG", "EPG", "PG", "ONLINE", "UPI", "NEFT", "RTGS", "IMPS",
+            "NET BANKING", "NETBANKING", "INTERNET BANKING", "CREDIT CARD",
+            "DEBIT CARD", "CARD", "EPAY", "E-PAY", "EPAYMENT", "E-PAYMENT",
+            "DIGITAL", "WEB", "BILLDESK", "RAZORPAY", "PAYU"
+        }:
+            return "ONLINE"
+        if val in {"CHEQUE", "CHQ", "CHQ.", "DD", "DEMAND DRAFT"}:
+            return "CHEQUE"
+        if val in {"AUTO DEBIT", "ECS", "NACH", "STANDING INSTRUCTION"}:
+            return "AUTO DEBIT"
+        if val == "CASH":
+            return "CASH"
+
+    # 2. Payment Details / Instrument Details block check
     m_pay = re.search(
         r"(?i)(?:Payment\s*Details|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Mode\s*of\s*Payment|Payment\s*Mode)([\s\S]{0,450})",
         pdf_text,
@@ -156,20 +189,8 @@ def extract_premium_mode(pdf_text: str) -> str:
             return "AUTO DEBIT"
         if re.search(r"(?i)\bCash\b", clean_block):
             return "CASH"
-        if re.search(r"(?i)\b(?:Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|Credit\s*Card|Debit\s*Card|Card|PG|E-?Pay|Digital)\b", clean_block):
+        if re.search(r"(?i)\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU)\b", clean_block):
             return "ONLINE"
-
-    m_mode = re.search(
-        r"(?i)(?:Payment\s*Mode|Mode\s*of\s*Payment)\s*[:\-]\s*(Cheque|Online|UPI|NEFT|RTGS|IMPS|Cash|Card|Credit\s*Card|Debit\s*Card|Auto\s*Debit|ECS|NACH)",
-        pdf_text,
-    )
-    if m_mode:
-        val = m_mode.group(1).strip().upper()
-        if val in {"UPI", "NEFT", "RTGS", "IMPS", "CARD", "CREDIT CARD", "DEBIT CARD"}:
-            return "ONLINE"
-        if val in {"ECS", "NACH"}:
-            return "AUTO DEBIT"
-        return val
 
     return ""
 
@@ -699,6 +720,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
 
     debug_info = {
         "file_name": file_name,
+        "client_name": "",
         "detected_company": "",
         "company_scores": {},
         "raw_text": "",
@@ -711,7 +733,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
 
         if len(pdf_text.strip()) < 80:
             base_row["Client Name"] = file_name
-            base_row["Folder"] = "PLS CHECK ERROR"
+            debug_info["client_name"] = file_name
             debug_info["error_reason"] = "Scanned / Image PDF (text readable nahi hai)"
             return base_row, False, debug_info["error_reason"], debug_info
 
@@ -724,7 +746,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
         if not company or company not in supported:
             base_row["Client Name"] = file_name
             base_row["Company Name"] = company or "UNKNOWN"
-            base_row["Folder"] = "PLS CHECK ERROR"
+            debug_info["client_name"] = file_name
             debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
             return base_row, False, debug_info["error_reason"], debug_info
 
@@ -732,10 +754,11 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
         if not extracted["client_name"] and not extracted["policy_number"]:
             base_row["Client Name"] = file_name
             base_row["Company Name"] = company
-            base_row["Folder"] = "PLS CHECK ERROR"
+            debug_info["client_name"] = file_name
             debug_info["error_reason"] = "Client Name aur Policy Number extract nahi ho paya"
             return base_row, False, debug_info["error_reason"], debug_info
 
+        debug_info["client_name"] = extracted["client_name"] or file_name
         master_info = lookup_client_master(extracted["client_name"], master_df)
 
         end_dt = extracted["end_dt"]
@@ -764,7 +787,6 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
             "Premium Mode": extract_premium_mode(pdf_text),
             "Policy Status": policy_status,
             "Remark": "",
-            "Folder": "YES",
             "PYP Number": str(extracted["pyp_number"]),
             "Share": "",
             "Share %": "",
@@ -777,7 +799,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
 
     except Exception as e:
         base_row["Client Name"] = file_name
-        base_row["Folder"] = "PLS CHECK ERROR"
+        debug_info["client_name"] = file_name
         debug_info["error_reason"] = str(e)
         return base_row, False, str(e), debug_info
 
