@@ -271,6 +271,7 @@ else:
                 "skipped_count": skipped_count,
                 "save_msg": save_msg,
                 "error_details": error_details,
+                "debug_list": debug_list,
                 "all_zip_bytes": all_zip_bytes,
                 "err_zip_bytes": err_zip_bytes,
             }
@@ -278,11 +279,7 @@ else:
             # Last 5 rounds ki history rakhein (sabse naya sabse upar)
             st.session_state.batch_history.insert(0, batch_record)
             st.session_state.batch_history = st.session_state.batch_history[:MAX_PDF_ROUNDS]
-
-            st.session_state["last_results"] = {
-                **batch_record,
-                "debug_list": debug_list,
-            }
+            st.session_state["last_results"] = batch_record
 
             # Entry complete hote hi PDF box auto-clear (Client Master wahi rahega)
             st.session_state.pdf_uploader_key += 1
@@ -413,15 +410,36 @@ else:
     else:
         st.info("Abhi aapki saved Health sheet khali hai. Pehli baar PDF upload karte hi saari entries yahan save hone lagengi.")
 
-    # --- DEBUG MODE ---
-    if "last_results" in st.session_state:
-        with st.expander("🐞 Debug Mode — Kisi bhi PDF ka Raw Text & Company Score Dekhein"):
-            debug_list = st.session_state["last_results"].get("debug_list", [])
-            if debug_list:
-                file_names = [d["file_name"] for d in debug_list]
-                selected_name = st.selectbox("Debug karne ke liye PDF chunein:", file_names)
-                selected_debug = next(d for d in debug_list if d["file_name"] == selected_name)
+    # --- DEBUG MODE (FIXED: INSTANT TEXT SWITCH + FULL COPYABLE TEXT + LAST 5 ROUNDS) ---
+    if st.session_state.batch_history:
+        with st.expander("🐞 Debug Mode — Kisi bhi PDF ka Full Raw Text & Company Score Dekhein"):
+            round_options = [
+                f"Round #{b['round_no']} ({b['time_display']}) - {b['total_count']} PDFs"
+                for b in st.session_state.batch_history
+            ]
+            selected_round_idx = st.selectbox(
+                "Round chunein:",
+                options=range(len(round_options)),
+                format_func=lambda i: round_options[i],
+                key="debug_round_selector"
+            )
+            chosen_batch = st.session_state.batch_history[selected_round_idx]
+            debug_list = chosen_batch.get("debug_list", [])
 
+            if debug_list:
+                pdf_labels = [
+                    f"{idx + 1}. {d.get('client_name') or d['file_name']}  —  [{d['file_name']}]"
+                    for idx, d in enumerate(debug_list)
+                ]
+                selected_pdf_idx = st.selectbox(
+                    "Debug karne ke liye Policy / Name chunein:",
+                    options=range(len(pdf_labels)),
+                    format_func=lambda i: pdf_labels[i],
+                    key=f"debug_pdf_selector_{chosen_batch['round_no']}"
+                )
+                selected_debug = debug_list[selected_pdf_idx]
+
+                st.write("**File Name:**", selected_debug["file_name"])
                 st.write("**Detected Company:**", selected_debug["detected_company"] or "None")
                 st.write("**Company Keyword Count:**", selected_debug["company_scores"] or "No match")
                 if selected_debug["error_reason"]:
@@ -429,9 +447,20 @@ else:
 
                 raw_txt = selected_debug["raw_text"] or ""
                 st.download_button(
-                    "📄 Download Raw Text (.txt)",
+                    "📄 Download Full Raw Text (.txt)",
                     data=raw_txt.encode("utf-8"),
-                    file_name=f"DEBUG_{selected_name}.txt",
-                    mime="text/plain"
+                    file_name=f"DEBUG_{selected_debug['file_name']}.txt",
+                    mime="text/plain",
+                    key=f"debug_dl_{chosen_batch['round_no']}_{selected_pdf_idx}"
                 )
-                st.text_area("Extracted Text (Preview)", raw_txt[:6000], height=300)
+
+                # Dynamic key ki wajah se har baar naam badalne par turant ussi PDF ka FULL text load hoga
+                st.text_area(
+                    f"Full Extracted PDF Text ({len(raw_txt)} characters) — Ctrl+A, Ctrl+C se copy karein:",
+                    value=raw_txt,
+                    height=380,
+                    key=f"debug_textarea_{chosen_batch['round_no']}_{selected_pdf_idx}_{selected_debug['file_name']}"
+                )
+
+                with st.expander("📋 1-Click Copy Box (Upar right corner me Copy icon milega)"):
+                    st.code(raw_txt, language=None)
