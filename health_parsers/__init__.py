@@ -1,0 +1,33 @@
+from . import (
+    manipal_cigna,
+    care_health,
+    niva_bupa,
+    oriental,
+    united_india,
+    icici_lombard,
+    new_india,
+    iffco_tokio,
+    bajaj_allianz,
+    tata_aig,
+    hdfc_ergo,
+    national,
+    aditya_birla,
+    star_health,
+)
+
+COMPANY_PARSERS = {
+    "MANIPAL CIGNA": manipal_cigna.parse,
+    "CARE HEALTH": care_health.parse,
+    "NIVA BUPA": niva_bupa.parse,
+    "ORIENTAL": oriental.parse,
+    "UNITED INDIA": united_india.parse,
+    "ICICI LOMBARD": icici_lombard.parse,
+    "NEW INDIA": new_india.parse,
+    "IFFCO TOKIO": iffco_tokio.parse,
+    "BAJAJ ALLIANZ": bajaj_allianz.parse,
+    "TATA AIG": tata_aig.parse,
+    "HDFC ERGO": hdfc_ergo.parse,
+    "NATIONAL": national.parse,
+    "ADITYA BIRLA": aditya_birla.parse,
+    "STAR HEALTH": star_health.parse,
+}
