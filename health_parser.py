@@ -2,6 +2,7 @@ import io
 import re
 from datetime import datetime, timedelta, timezone
 import pandas as pd
+import pymupdf
 from pypdf import PdfReader
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -36,27 +37,35 @@ COMPANY_KEYWORDS = {
 
 
 def extract_pdf_text(pdf_bytes: bytes, max_pages: int = 15) -> str:
+    """Primary: PyMuPDF (HDFC ERGO jaise strict font PDFs bhi bina crash padhta hai). Backup: pypdf."""
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        parts = []
+        for page in doc[:max_pages]:
+            parts.append(page.get_text("text") or "")
+        doc.close()
+        text = "\n".join(parts)
+        if text.strip():
+            return text
+    except Exception:
+        pass
+
     reader = PdfReader(io.BytesIO(pdf_bytes))
     parts = []
     for page in reader.pages[:max_pages]:
-        txt = page.extract_text() or ""
-        parts.append(txt)
+        parts.append(page.extract_text() or "")
     return "\n".join(parts)
 
 
-def detect_company_by_frequency(pdf_text: str) -> str:
-    """Renamer Bot Logic: Jis company ka naam PDF me sabse zyada baar aaye wahi select hogi."""
+def get_company_scores(pdf_text: str) -> dict:
+    """Renamer Bot Logic: Har company ka naam kitni baar aaya uska score nikalta hai."""
     text_lower = pdf_text.lower()
-    best_company = ""
-    best_count = 0
-
+    scores = {}
     for company, keywords in COMPANY_KEYWORDS.items():
         count = sum(len(re.findall(re.escape(kw), text_lower)) for kw in keywords)
-        if count > best_count:
-            best_count = count
-            best_company = company
-
-    return best_company if best_count > 0 else ""
+        if count > 0:
+            scores[company] = count
+    return dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))
 
 
 def parse_any_date(date_str: str):
@@ -102,7 +111,10 @@ def extract_generic_agency(pdf_text: str) -> str:
 
 
 def extract_premium_mode(pdf_text: str) -> str:
-    m = re.search(r"(?i)(?:Premium\s*(?:Payment\s*)?Mode|Payment\s*Frequency|Policy\s*Tenure)\s*[:\-]?\s*(Annual|Yearly|Half[- ]?Yearly|Quarterly|Monthly|Single|1\s*Year|2\s*Years?|3\s*Years?)", pdf_text)
+    m = re.search(
+        r"(?i)(?:Premium\s*(?:Payment\s*)?Mode|Payment\s*Frequency|Policy\s*Tenure)\s*[:\-]?\s*(Annual|Yearly|Half[- ]?Yearly|Quarterly|Monthly|Single|1\s*Year|2\s*Years?|3\s*Years?)",
+        pdf_text,
+    )
     if m:
         return m.group(1).strip().upper()
     return ""
@@ -377,7 +389,7 @@ def extract_fields_by_company(company: str, pdf_text: str) -> dict:
         if m: data["policy_number"] = m.group(1)
         m = re.search(r"(?i)Gross Premium[^\d]{1,30}([0-9][0-9,]{2,}(?:\.\d{1,2})?)", pdf_text) or re.search(r"(?i)(?:Total Premium|Net Premium|Amount Payable)[^\d]{1,30}([0-9][0-9,]{2,}(?:\.\d{1,2})?)", pdf_text)
         if m: data["premium"] = clean_amount(m.group(1))
-        m = re.search(r"(?i)(?:Base Sum Insured\s*per\s*Insured\s*Person[^\d]{0,40}|Sum Insured opted\s*:[^\d]{0,10}|Base Sum Insured[^\d]{0,20}|Total Sum Insured[^\d]{0,20})([1-9][0-9, ]{4,})", pdf_text)
+        m = re.search(r"(?i)(?:Base Sum Insured\s*per\s*Insured\s*Person[^\d]{0,40}|Sum Insured opted\s*:[^\d]{0,10}|Base Sum Insured[^\d]{0,20}|Total Sum Insured[^\d]{0,20})([1-9][0-9, ]{4,})", pdf_text) or re.search(r"(?i)(?:1[\s\.\-]*Accidental Death[^\d]{0,20})([1-9][0-9,]{4,})", pdf_text)
         if m: data["sum_insured"] = clean_amount(m.group(1))
 
         if data["plan_name"] == "SARV SURAKSHA PLUS (GROUP)":
@@ -413,12 +425,18 @@ def lookup_client_master(client_name: str, master_df: pd.DataFrame) -> dict:
         return empty
 
     row = matched.iloc[0]
+
     def get_val(keys):
         for k in keys:
             if k in cols:
                 v = row[cols[k]]
                 if pd.notna(v):
-                    return str(v).strip()
+                    s = str(v).strip()
+                    if s.lower() == "nan":
+                        return ""
+                    if re.fullmatch(r"\d+\.0+", s):
+                        s = s.split(".")[0]
+                    return s
         return ""
 
     return {
@@ -431,7 +449,7 @@ def lookup_client_master(client_name: str, master_df: pd.DataFrame) -> dict:
 
 
 def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
-    """Returns (row_dict, is_success, error_reason)"""
+    """Returns (row_dict, is_success, error_reason, debug_info)"""
     today_ist = datetime.now(IST).replace(tzinfo=None)
     entry_date = fmt_date(today_ist)
 
@@ -439,14 +457,29 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
     base_row["Insurance Type"] = "HEALTH INSURANCE"
     base_row["Date of Entry"] = entry_date
 
+    debug_info = {
+        "file_name": file_name,
+        "detected_company": "",
+        "company_scores": {},
+        "raw_text": "",
+        "error_reason": "",
+    }
+
     try:
         pdf_text = extract_pdf_text(pdf_bytes)
+        debug_info["raw_text"] = pdf_text
+
         if len(pdf_text.strip()) < 80:
             base_row["Client Name"] = file_name
             base_row["Folder"] = "PLS CHECK ERROR"
-            return base_row, False, "Scanned / Image PDF (text readable nahi hai)"
+            debug_info["error_reason"] = "Scanned / Image PDF (text readable nahi hai)"
+            return base_row, False, debug_info["error_reason"], debug_info
 
-        company = detect_company_by_frequency(pdf_text)
+        scores = get_company_scores(pdf_text)
+        company = next(iter(scores.keys()), "")
+        debug_info["company_scores"] = scores
+        debug_info["detected_company"] = company
+
         supported = {
             "MANIPAL CIGNA", "CARE HEALTH", "NIVA BUPA", "ORIENTAL",
             "UNITED INDIA", "ICICI LOMBARD", "NEW INDIA", "IFFCO TOKIO",
@@ -457,14 +490,16 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
             base_row["Client Name"] = file_name
             base_row["Company Name"] = company or "UNKNOWN"
             base_row["Folder"] = "PLS CHECK ERROR"
-            return base_row, False, f"Company parser abhi add nahi hua: {company or 'Unknown'}"
+            debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
+            return base_row, False, debug_info["error_reason"], debug_info
 
         extracted = extract_fields_by_company(company, pdf_text)
         if not extracted["client_name"] and not extracted["policy_number"]:
             base_row["Client Name"] = file_name
             base_row["Company Name"] = company
             base_row["Folder"] = "PLS CHECK ERROR"
-            return base_row, False, "Client Name aur Policy Number extract nahi ho paya"
+            debug_info["error_reason"] = "Client Name aur Policy Number extract nahi ho paya"
+            return base_row, False, debug_info["error_reason"], debug_info
 
         master_info = lookup_client_master(extracted["client_name"], master_df)
 
@@ -479,7 +514,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
             "Client Code": master_info["client_code"],
             "Mobile": master_info["mobile"],
             "Mail Id": master_info["mail_id"],
-            "Policy Number": extracted["policy_number"],
+            "Policy Number": str(extracted["policy_number"]),
             "Insurance Type": "HEALTH INSURANCE",
             "Sub Type": extracted["sub_type"],
             "Company Name": company,
@@ -495,7 +530,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
             "Policy Status": policy_status,
             "Remark": "",
             "Folder": "YES",
-            "PYP Number": extracted["pyp_number"],
+            "PYP Number": str(extracted["pyp_number"]),
             "Share": "",
             "Share %": "",
             "Family code": master_info["family_code"],
@@ -503,12 +538,13 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
             "DOB": extract_oldest_dob(pdf_text, extracted["start_dt"]),
             "OUR RENEWAL": "",
         })
-        return base_row, True, ""
+        return base_row, True, "", debug_info
 
     except Exception as e:
         base_row["Client Name"] = file_name
         base_row["Folder"] = "PLS CHECK ERROR"
-        return base_row, False, str(e)
+        debug_info["error_reason"] = str(e)
+        return base_row, False, str(e), debug_info
 
 
 def build_excel_bytes(rows: list) -> bytes:
@@ -528,9 +564,10 @@ def build_excel_bytes(rows: list) -> bytes:
 
     for r_idx, row_dict in enumerate(rows, start=2):
         for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
-            val = row_dict.get(col_name, "")
+            val = str(row_dict.get(col_name, "") or "")
             cell = ws.cell(row=r_idx, column=col_idx, value=val)
             if col_name in text_cols:
+                cell.data_type = "s"
                 cell.number_format = "@"
 
     for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
