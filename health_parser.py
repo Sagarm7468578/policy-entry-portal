@@ -107,7 +107,13 @@ def clean_person_name(name: str) -> str:
 
 def extract_generic_agency(pdf_text: str) -> str:
     patterns = [
+        # Stacked 3-column table format (HDFC ERGO style)
+        r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*Intermediary\s*Contact\s*(?:Number|No\.?)\s*[\r\n]+\s*([^\r\n]{3,60})",
+        # Stacked 2-column table format
+        r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
+        # TATA AIG format
         r"(?i)Agent/Intermediary Contact No\.[\s\r\n]+([A-Za-z\s]+?)\s+[A-Z0-9]{5,20}\s+\d{8,15}",
+        # Standard inline format with colon/dash
         r"(?i)(?:Intermediary|Agent|Broker|IMD|Advisor|POSP)\s*Name\s*[:\-]\s*([^\r\n]{3,60})",
         r"(?i)Name\s*of\s*(?:Intermediary|Agent|Broker|Advisor)\s*[:\-]\s*([^\r\n]{3,60})",
     ]
@@ -117,18 +123,54 @@ def extract_generic_agency(pdf_text: str) -> str:
             val = re.split(r"(?i)\b(?:Code|Contact|Mobile|Email|Phone|License|ID|No\.)\b", m.group(1))[0]
             val = re.sub(r"[^A-Za-z0-9\s.&/-]", "", val)
             val = re.sub(r"\s+", " ", val).strip()
-            if len(val) >= 3:
+            if len(val) >= 3 and not val.isdigit():
                 return val.upper()
     return ""
 
 
 def extract_premium_mode(pdf_text: str) -> str:
-    m = re.search(
-        r"(?i)(?:Premium\s*(?:Payment\s*)?Mode|Payment\s*Frequency|Policy\s*Tenure)\s*[:\-]?\s*(Annual|Yearly|Half[- ]?Yearly|Quarterly|Monthly|Single|1\s*Year|2\s*Years?|3\s*Years?)",
+    """Payment Details / Instrument Details se payment mode (CHEQUE / ONLINE / CASH / AUTO DEBIT) nikalta hai."""
+    # 1. Payment Details / Instrument Details section check
+    m_pay = re.search(
+        r"(?i)(?:Payment\s*Details|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Mode\s*of\s*Payment|Payment\s*Mode)([\s\S]{0,450})",
         pdf_text,
     )
-    if m:
-        return m.group(1).strip().upper()
+    if m_pay:
+        block = m_pay.group(0)
+        # Pincode / HSN jaisi cheezein hata dein taaki 6-digit number me false match na ho
+        clean_block = re.sub(r"(?i)(?:Pin\s*Code|Pincode|HSN\s*Code|Mumbai|Indore|Delhi|Chennai|Hyderabad)\s*[:\-]?\s*\d{6}", "", block)
+
+        if re.search(r"(?i)\b(?:Cheque|Chq\.?|DD|Demand\s*Draft)\b", clean_block):
+            return "CHEQUE"
+
+        # Instrument Details / Instrument No ke aas-paas exact 6-digit number = CHEQUE
+        m_inst = re.search(
+            r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,220}?(?<![A-Za-z0-9/\-])(\d{6})(?![A-Za-z0-9/\-])",
+            clean_block,
+        )
+        if m_inst:
+            return "CHEQUE"
+
+        if re.search(r"(?i)\b(?:ECS|NACH|Auto\s*Debit|Standing\s*Instruction)\b", clean_block):
+            return "AUTO DEBIT"
+        if re.search(r"(?i)\bCash\b", clean_block):
+            return "CASH"
+        if re.search(r"(?i)\b(?:Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|Credit\s*Card|Debit\s*Card|Card|PG|E-?Pay|Digital)\b", clean_block):
+            return "ONLINE"
+
+    # 2. Fallback: Explicit Payment Mode label kahin bhi PDF me
+    m_mode = re.search(
+        r"(?i)(?:Payment\s*Mode|Mode\s*of\s*Payment)\s*[:\-]\s*(Cheque|Online|UPI|NEFT|RTGS|IMPS|Cash|Card|Credit\s*Card|Debit\s*Card|Auto\s*Debit|ECS|NACH)",
+        pdf_text,
+    )
+    if m_mode:
+        val = m_mode.group(1).strip().upper()
+        if val in {"UPI", "NEFT", "RTGS", "IMPS", "CARD", "CREDIT CARD", "DEBIT CARD"}:
+            return "ONLINE"
+        if val in {"ECS", "NACH"}:
+            return "AUTO DEBIT"
+        return val
+
     return ""
 
 
@@ -409,8 +451,9 @@ def extract_fields_by_company(company: str, pdf_text: str) -> dict:
             m = re.search(r"(?i)(?:Proposer Name\s*:\s*|Dear\s+)([^\r\n,]+)", pdf_text)
             if m: data["client_name"] = clean_person_name(m.group(1))
 
+        # Policy Number (Leading comma ',' added for HDFC ERGO)
         m = re.search(r"\b(\d{15,20})\b", pdf_text)
-        if m: data["policy_number"] = m.group(1)
+        if m: data["policy_number"] = f",{m.group(1)}"
 
         if is_my_optima:
             m = (
@@ -424,9 +467,11 @@ def extract_fields_by_company(company: str, pdf_text: str) -> dict:
             )
         if m: data["premium"] = clean_amount(m.group(1))
 
+        # Sum Insured (Inline + Stacked Table fallback for Optima Secure)
         m = (
             re.search(r"(?i)(?:Base Sum Insured\s*per\s*Insured\s*Person[^\d]{0,40}|Sum Insured opted\s*:[^\d]{0,10}|Base Sum Insured[^\d]{0,20}|Total Sum Insured[^\d]{0,20})([1-9][0-9, ]{4,})", pdf_text)
             or re.search(r"(?i)(?:Sum Insured opted[\s:]*|1[\s\.\-]*Accidental Death[^\d]{0,20})([1-9][0-9,]{4,})", pdf_text)
+            or re.search(r"(?i)Base\s*Sum\s*Insured[\s\S]{1,500}?\b\d{2}[/-]\d{2}[/-]\d{4}\s+([1-9][0-9,]{4,8})\b", pdf_text)
         )
         if m: data["sum_insured"] = clean_amount(m.group(1))
 
@@ -440,8 +485,10 @@ def extract_fields_by_company(company: str, pdf_text: str) -> dict:
             if m: data["start_dt"] = parse_any_date(m.group(1))
             m = re.search(r"(?i)To\s*(?:\d{2}:\d{2}\s*hrs\s*on\s*)?(\d{2}[/-]\d{2}[/-]\d{4})", pdf_text)
             if m: data["end_dt"] = parse_any_date(m.group(1))
+
+        # Previous Policy Number (Leading comma ',' added for HDFC ERGO)
         m = re.search(r"(?i)Previous Policy[\s:]*(\d{6,})", pdf_text)
-        if m: data["pyp_number"] = m.group(1).strip()
+        if m: data["pyp_number"] = f",{m.group(1).strip()}"
 
     # 12. NATIONAL INSURANCE
     elif company == "NATIONAL":
