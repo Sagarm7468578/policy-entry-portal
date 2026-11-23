@@ -117,9 +117,9 @@ else:
             if master_file is not None:
                 try:
                     if master_file.name.lower().endswith(".csv"):
-                        master_df = pd.read_csv(master_file)
+                        master_df = pd.read_csv(master_file, dtype=str)
                     else:
-                        master_df = pd.read_excel(master_file)
+                        master_df = pd.read_excel(master_file, dtype=str)
                 except Exception as e:
                     st.warning(f"Client Master read nahi ho payi ({e}). Bina master ke entry kar rahe hain.")
 
@@ -127,6 +127,7 @@ else:
             done_files = []
             error_files = []
             error_details = []
+            debug_list = []
 
             progress = st.progress(0)
             status_text = st.empty()
@@ -134,8 +135,9 @@ else:
             for idx, pdf in enumerate(uploaded_pdfs):
                 status_text.text(f"Processing ({idx + 1}/{len(uploaded_pdfs)}): {pdf.name}")
                 pdf_bytes = pdf.read()
-                row_dict, is_ok, err_msg = process_health_pdf(pdf.name, pdf_bytes, master_df)
+                row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df)
                 rows.append(row_dict)
+                debug_list.append(debug_info)
 
                 if is_ok:
                     comp = row_dict["Company Name"].replace(" ", "_")
@@ -149,7 +151,6 @@ else:
             status_text.empty()
             progress.empty()
 
-            # Build Excel & Sorted ZIP in memory
             excel_bytes = build_excel_bytes(rows)
 
             all_zip_buf = io.BytesIO()
@@ -173,6 +174,7 @@ else:
                 "done_count": len(done_files),
                 "error_count": len(error_files),
                 "error_details": error_details,
+                "debug_list": debug_list,
                 "excel_bytes": excel_bytes,
                 "all_zip_bytes": all_zip_bytes,
                 "err_zip_bytes": err_zip_bytes,
@@ -223,3 +225,24 @@ else:
 
         st.subheader("📊 Extracted Policy Data Preview")
         st.dataframe(pd.DataFrame(res["rows"]), use_container_width=True, hide_index=True)
+
+        with st.expander("🐞 Debug Mode — Kisi bhi PDF ka Raw Text & Company Score Dekhein"):
+            debug_list = res.get("debug_list", [])
+            if debug_list:
+                file_names = [d["file_name"] for d in debug_list]
+                selected_name = st.selectbox("Debug karne ke liye PDF chunein:", file_names)
+                selected_debug = next(d for d in debug_list if d["file_name"] == selected_name)
+
+                st.write("**Detected Company:**", selected_debug["detected_company"] or "None")
+                st.write("**Company Keyword Count:**", selected_debug["company_scores"] or "No match")
+                if selected_debug["error_reason"]:
+                    st.error(f"Error Reason: {selected_debug['error_reason']}")
+
+                raw_txt = selected_debug["raw_text"] or ""
+                st.download_button(
+                    "📄 Download Raw Text (.txt)",
+                    data=raw_txt.encode("utf-8"),
+                    file_name=f"DEBUG_{selected_name}.txt",
+                    mime="text/plain"
+                )
+                st.text_area("Extracted Text (Preview)", raw_txt[:6000], height=300)
