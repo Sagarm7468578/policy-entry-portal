@@ -10,11 +10,15 @@ import streamlit as st
 from health_parser import (
     OUTPUT_COLUMNS,
     ALL_SYSTEM_FIELDS,
+    MONTH_NAMES_BY_NUM,
     normalize_custom_columns_spec,
     spec_to_multiline,
     get_custom_schema_info,
     project_rows_to_schema,
     process_health_pdf,
+    parse_renewal_list_pdf,
+    get_renewal_lookup_months,
+    match_renewal_record,
     build_excel_bytes,
     build_sample_master_bytes,
     build_sample_accounts_master_bytes,
@@ -79,6 +83,9 @@ def load_user_sheet_settings(user_id):
             "motor_accounts_tab": res.get("motor_accounts_tab", ""),
             "sme_accounts_url": res.get("sme_accounts_url", ""),
             "sme_accounts_tab": res.get("sme_accounts_tab", ""),
+            "health_renewal_folder_url": res.get("health_renewal_folder_url", ""),
+            "motor_renewal_folder_url": res.get("motor_renewal_folder_url", ""),
+            "sme_renewal_folder_url": res.get("sme_renewal_folder_url", ""),
         }
     return {
         "fixed_sheet_url": "",
@@ -97,6 +104,9 @@ def load_user_sheet_settings(user_id):
         "motor_accounts_tab": "",
         "sme_accounts_url": "",
         "sme_accounts_tab": "",
+        "health_renewal_folder_url": "",
+        "motor_renewal_folder_url": "",
+        "sme_renewal_folder_url": "",
     }
 
 
@@ -163,6 +173,62 @@ def fetch_linked_accounts_master(sheet_url, sheet_tab=""):
         return pd.DataFrame(), sheet_name, ""
     df = pd.DataFrame(rows, columns=headers, dtype=str)
     return df, sheet_name, ""
+
+
+def apply_renewal_list_lookup(extracted_rows, renewal_folder_url):
+    """
+    If user has linked a Renewal List folder for the category:
+    - Fetches only the required Month/Year Renewal List PDF(s) from Drive (cached per month).
+    - Matches each policy -> fills 'PYP premium' + sets 'OUR RENEWAL' = 'YES'.
+    - If not found in Renewal List -> sets 'OUR RENEWAL' = 'NO' and 'PYP premium' = ''.
+    """
+    clean_url = str(renewal_folder_url or "").strip()
+    if not clean_url or not extracted_rows:
+        return
+
+    month_cache = {}
+
+    def get_month_records(year_int, month_int):
+        cache_key = (year_int, month_int)
+        if cache_key in month_cache:
+            return month_cache[cache_key]
+        m_full, m_short = MONTH_NAMES_BY_NUM.get(month_int, ("", ""))
+        if not m_full:
+            month_cache[cache_key] = []
+            return []
+        res = call_backend({
+            "action": "get_renewal_list_pdfs",
+            "folder_url": clean_url,
+            "year": str(year_int),
+            "month_name": m_full,
+            "month_short": m_short,
+        })
+        recs = []
+        if res.get("success"):
+            for f_obj in res.get("files", []):
+                b64 = f_obj.get("content_b64", "")
+                if b64:
+                    try:
+                        recs.extend(parse_renewal_list_pdf(base64.b64decode(b64)))
+                    except Exception:
+                        pass
+        month_cache[cache_key] = recs
+        return recs
+
+    for row_dict in extracted_rows:
+        matched_rec = None
+        for yr, mo in get_renewal_lookup_months(row_dict):
+            recs = get_month_records(yr, mo)
+            matched_rec = match_renewal_record(row_dict, recs)
+            if matched_rec:
+                break
+
+        if matched_rec:
+            row_dict["PYP premium"] = matched_rec.get("premium", "")
+            row_dict["OUR RENEWAL"] = "YES"
+        else:
+            row_dict["PYP premium"] = ""
+            row_dict["OUR RENEWAL"] = "NO"
 
 
 def scan_drive_folder_pdfs(user_id, folder_url, year_folder="", month_folder=""):
@@ -574,6 +640,12 @@ defaults = {
     "sme_accounts_name": "",
     "sme_accounts_df": None,
     "sme_accounts_error": "",
+    "health_renewal_folder_url": "",
+    "health_renewal_folder_name": "",
+    "motor_renewal_folder_url": "",
+    "motor_renewal_folder_name": "",
+    "sme_renewal_folder_url": "",
+    "sme_renewal_folder_name": "",
     "health_custom_columns": "",
     "health_folder_url": "",
     "health_folder_name": "",
@@ -695,7 +767,7 @@ if not st.session_state.logged_in:
 # --- MAIN POLICY ENTRY DASHBOARD ---
 else:
     if not st.session_state.settings_loaded:
-        with st.spinner("Aapki linked sheets, Accounts Masters, Excel file aur folders load ho rahe hain..."):
+        with st.spinner("Aapki linked sheets, Accounts Masters, Renewal Lists aur folders load ho rahe hain..."):
             cfg = load_user_sheet_settings(st.session_state.user_id)
             l_path, l_tab = load_local_excel_path()
             st.session_state.fixed_sheet_url = cfg["fixed_sheet_url"]
@@ -714,6 +786,9 @@ else:
             st.session_state.motor_accounts_tab = cfg["motor_accounts_tab"]
             st.session_state.sme_accounts_url = cfg["sme_accounts_url"]
             st.session_state.sme_accounts_tab = cfg["sme_accounts_tab"]
+            st.session_state.health_renewal_folder_url = cfg["health_renewal_folder_url"]
+            st.session_state.motor_renewal_folder_url = cfg["motor_renewal_folder_url"]
+            st.session_state.sme_renewal_folder_url = cfg["sme_renewal_folder_url"]
             st.session_state.local_excel_path = l_path
             st.session_state.local_sheet_name = l_tab
 
@@ -1263,12 +1338,83 @@ else:
                                 key=f"upload_acc_{ck}",
                             )
 
-        # 5. CUSTOM SHEET COLUMNS PANEL
+        # 5. RENEWAL LIST PANEL (SEPARATE DRIVE FOLDERS FOR HEALTH / MOTOR / SME)
+        rn_linked_cnt = sum([
+            bool(st.session_state.health_renewal_folder_url),
+            bool(st.session_state.motor_renewal_folder_url),
+            bool(st.session_state.sme_renewal_folder_url),
+        ])
+        rn_badge = f"✅ {rn_linked_cnt}/3 Linked" if rn_linked_cnt > 0 else "⚪ Not Linked"
+
+        with st.expander(f"🔄 Renewal List ({rn_badge})", expanded=False):
+            st.caption(
+                "Health, Motor aur SME ka Renewal List PDF folder (`GIC RENEWALS/HEALTH` ya `2026`) link karein.  \n"
+                "Match hone par `PYP premium` auto-fill hoga aur `OUR RENEWAL` = `YES` (warna `NO`)."
+            )
+            rt_health, rt_motor, rt_sme = st.tabs(["🏥 Health", "🚗 Motor", "🏢 SME"])
+
+            rn_tabs = [
+                (rt_health, "Health", "health_renewal_folder_url", "health_renewal_folder_name"),
+                (rt_motor, "Motor", "motor_renewal_folder_url", "motor_renewal_folder_name"),
+                (rt_sme, "SME", "sme_renewal_folder_url", "sme_renewal_folder_name"),
+            ]
+
+            for tab_ui, cat_label, url_key, name_key in rn_tabs:
+                with tab_ui:
+                    curr_url = st.session_state[url_key]
+                    curr_name = st.session_state[name_key]
+                    if curr_url:
+                        disp_nm = f"**{curr_name}**  \n" if curr_name else ""
+                        st.success(f"{disp_nm}✅ {cat_label} Renewal Folder Linked")
+                        if curr_url.startswith("http"):
+                            st.link_button(
+                                f"🔗 Open {cat_label} Renewal Folder",
+                                curr_url,
+                                use_container_width=True,
+                            )
+                        if st.button(f"🔓 Unlink {cat_label} Renewal", use_container_width=True, key=f"unlink_{url_key}"):
+                            with st.spinner("Unlink ho raha hai..."):
+                                u_res = save_user_sheet_settings(st.session_state.user_id, **{url_key: ""})
+                            if u_res.get("success"):
+                                st.session_state[url_key] = ""
+                                st.session_state[name_key] = ""
+                                st.rerun()
+                            else:
+                                st.error(u_res.get("message", "Unlink nahi ho paya."))
+                    else:
+                        rn_inp = st.text_input(
+                            f"{cat_label} Renewal Folder Link",
+                            placeholder="https://drive.google.com/drive/folders/...",
+                            key=f"inp_{url_key}",
+                        )
+                        if st.button(f"🔗 Link {cat_label} Renewal Folder", type="primary", use_container_width=True, key=f"btn_{url_key}"):
+                            clean_rn = rn_inp.strip()
+                            if not clean_rn:
+                                st.warning(f"{cat_label} Renewal List Drive Folder link dalein.")
+                            else:
+                                with st.spinner("Renewal folder verify & link ho raha hai..."):
+                                    v_res = call_backend({
+                                        "action": "verify_drive_folder",
+                                        "folder_url": clean_rn,
+                                    })
+                                    if not v_res.get("success"):
+                                        st.error(v_res.get("message", "Folder access nahi ho paya. Folder ko Viewer/Editor share karein."))
+                                    else:
+                                        s_res = save_user_sheet_settings(st.session_state.user_id, **{url_key: clean_rn})
+                                        if s_res.get("success"):
+                                            st.session_state[url_key] = clean_rn
+                                            st.session_state[name_key] = v_res.get("folder_name", "")
+                                            st.rerun()
+                                        else:
+                                            st.error(s_res.get("message", "Save nahi ho paya."))
+                        st.caption("💡 Main category folder (`HEALTH`) link karne par har saal (`2026`, `2027`...) auto-detect hoga.")
+
+        # 6. CUSTOM SHEET COLUMNS PANEL
         col_badge = f"Custom: {len(active_headers)}" if is_custom_cols else f"Default: {len(OUTPUT_COLUMNS)}"
         with st.expander(f"🛠️ Sheet Columns ({col_badge})", expanded=False):
             st.caption(
                 "Har line me 1 column likhein (exact order me).  \n"
-                "• Auto-fill fields: Client Name, Policy Number, Occupation, Accounts, etc.  \n"
+                "• Auto-fill fields: Client Name, Policy Number, Occupation, Accounts, PYP premium, etc.  \n"
                 "• Manual/Blank column: Bas naam likh dein (e.g. `Mail`, `Print`, `Folder`)  \n"
                 "• Header rename: `Client Name => Insured Name`"
             )
@@ -1364,7 +1510,7 @@ else:
     if policy_category != "Health Insurance":
         st.info(
             f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein "
-            f"(aap abhi se sidebar me Motor/SME Drive Folder aur Accounts Master link karke rakh sakte hain)."
+            f"(aap abhi se sidebar me Motor/SME Drive Folder, Accounts Master aur Renewal List link karke rakh sakte hain)."
         )
         st.stop()
 
@@ -1400,6 +1546,9 @@ else:
     else:
         acc_status = "⚪ Not Linked"
 
+    rn_nm = st.session_state.health_renewal_folder_name or "Linked"
+    rn_status = f"✅ `{rn_nm}`" if st.session_state.health_renewal_folder_url else "⚪ Not Linked"
+
     cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
     mode_short = "Mode 3 (Drive Excel + Folder)" if is_mode3 else ("Mode 2 (Google Sheet)" if is_mode2 else "Mode 1 (Download)")
     folder_part = ""
@@ -1412,7 +1561,7 @@ else:
     st.caption(
         f"**Mode:** {mode_short}{folder_part}  |  "
         f"**{ps_label}:** {ps_status}  |  **Client Master:** {cm_status}  |  "
-        f"**Accounts Master:** {acc_status}  |  **Format:** {cols_status}"
+        f"**Accounts:** {acc_status}  |  **Renewal List:** {rn_status}  |  **Format:** {cols_status}"
     )
 
     if is_mode1 and st.session_state.saved_health_rows is None:
@@ -1657,6 +1806,13 @@ else:
                                 status_text.empty()
                                 progress.empty()
 
+                                if st.session_state.health_renewal_folder_url and extracted_rows:
+                                    with st.spinner("Renewal List PDFs se PYP premium & OUR RENEWAL check ho raha hai..."):
+                                        apply_renewal_list_lookup(
+                                            extracted_rows,
+                                            st.session_state.health_renewal_folder_url,
+                                        )
+
                                 with st.spinner("Drive status update & Error PDFs ki copy bana rahe hain..."):
                                     call_backend({
                                         "action": "finalize_drive_batch",
@@ -1760,6 +1916,13 @@ else:
 
                 status_text.empty()
                 progress.empty()
+
+                if st.session_state.health_renewal_folder_url and extracted_rows:
+                    with st.spinner("Renewal List PDFs se PYP premium & OUR RENEWAL check ho raha hai..."):
+                        apply_renewal_list_lookup(
+                            extracted_rows,
+                            st.session_state.health_renewal_folder_url,
+                        )
 
                 save_and_record_batch(
                     extracted_rows=extracted_rows,
