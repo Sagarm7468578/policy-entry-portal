@@ -17,6 +17,8 @@ from health_parser import (
     process_health_pdf,
     build_excel_bytes,
     build_sample_master_bytes,
+    read_excel_headers_from_bytes,
+    append_rows_to_excel_bytes,
     append_rows_to_local_excel,
 )
 
@@ -31,7 +33,7 @@ IS_CLOUD = os.path.exists("/mount/src")
 LOCAL_CONFIG_FILE = "mode2_local_config.json"
 
 
-def call_backend(payload, timeout=90):
+def call_backend(payload, timeout=120):
     payload["secret"] = SECRET_KEY
     try:
         res = requests.post(WEB_APP_URL, json=payload, timeout=timeout)
@@ -59,6 +61,8 @@ def load_user_sheet_settings(user_id):
             "health_folder_url": res.get("health_folder_url", ""),
             "motor_folder_url": res.get("motor_folder_url", ""),
             "sme_folder_url": res.get("sme_folder_url", ""),
+            "mode3_excel_url": res.get("mode3_excel_url", ""),
+            "mode3_excel_tab": res.get("mode3_excel_tab", ""),
         }
     return {
         "fixed_sheet_url": "",
@@ -69,6 +73,8 @@ def load_user_sheet_settings(user_id):
         "health_folder_url": "",
         "motor_folder_url": "",
         "sme_folder_url": "",
+        "mode3_excel_url": "",
+        "mode3_excel_tab": "",
     }
 
 
@@ -120,6 +126,109 @@ def scan_drive_folder_pdfs(user_id, folder_url, year_folder="", month_folder="")
         "selected_month": res.get("selected_month", ""),
         "files": res.get("files", []),
     }, ""
+
+
+def fetch_headers_from_drive_target(target_url, target_tab=""):
+    """Reads Row 1 headers from EITHER a Google Sheet OR a Google Drive Excel (.xlsx/.xlsm) file."""
+    g_res = call_backend({
+        "action": "get_drive_excel",
+        "sheet_url": target_url.strip(),
+    })
+    if not g_res.get("success"):
+        return [], g_res.get("message", "File access nahi ho payi.")
+    if g_res.get("is_google_sheet"):
+        h_res = call_backend({
+            "action": "get_sheet_headers",
+            "sheet_url": target_url.strip(),
+            "sheet_tab": target_tab.strip(),
+        })
+        if h_res.get("success") and h_res.get("headers"):
+            return h_res["headers"], ""
+        return [], h_res.get("message", "Sheet ki Row 1 khali hai.")
+    excel_bytes = base64.b64decode(g_res["content_b64"])
+    hdrs, _, err = read_excel_headers_from_bytes(excel_bytes, target_tab)
+    if err:
+        return [], err
+    if not hdrs:
+        return [], "Excel file ki Row 1 abhi khali hai."
+    return hdrs, ""
+
+
+def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schema, skip_duplicates, mode_tag):
+    """
+    Auto-detects whether target_url is a Google Drive Excel (.xlsx/.xlsm) OR a native Google Sheet.
+    - Drive Excel (.xlsx/.xlsm): Downloads bytes -> openpyxl appends below old rows -> PATCHes exact same Drive file in-place!
+    - Google Sheet: Appends directly via Apps Script.
+    """
+    probe = call_backend({
+        "action": "get_drive_excel",
+        "sheet_url": target_url.strip(),
+    })
+    if not probe.get("success"):
+        return False, "", f"❌ Target file open nahi hui: {probe.get('message', 'Unknown error')}", 0, ""
+
+    if probe.get("is_google_sheet"):
+        g_res = call_backend({
+            "action": "append_to_fixed_sheet",
+            "user_id": st.session_state.user_id,
+            "sheet_url": target_url.strip(),
+            "sheet_tab": target_tab.strip() or "Policy Entries",
+            "skip_duplicates": skip_duplicates,
+            "custom_columns": used_schema["headers"],
+            "col_types": used_schema["col_types"],
+            "policy_col": used_schema["policy_col"],
+            "expiry_col": used_schema["expiry_col"],
+            "rows": projected_rows,
+        })
+        if g_res.get("success"):
+            skipped_cnt = g_res.get("skipped", 0)
+            added_cnt = g_res.get("added", 0)
+            s_name = g_res.get("sheet_name", "Google Sheet")
+            t_name = g_res.get("tab_name", target_tab or "Policy Entries")
+            tot_cnt = g_res.get("total_rows", "")
+            msg = f"✅ {mode_tag} Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt})"
+            return True, msg, "", skipped_cnt, s_name
+        return False, "", f"❌ Google Sheet save fail: {g_res.get('message', 'Unknown error')}", 0, ""
+
+    file_name = probe.get("file_name", "Excel File.xlsx")
+    file_id = probe.get("file_id", "")
+    mime_type = probe.get("mime_type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    excel_bytes = base64.b64decode(probe["content_b64"])
+    keep_vba = file_name.lower().endswith(".xlsm")
+
+    ok, err_msg, updated_bytes, added_cnt, skipped_cnt, total_cnt, used_tab = append_rows_to_excel_bytes(
+        excel_bytes=excel_bytes,
+        rows=projected_rows,
+        sheet_name=target_tab.strip(),
+        skip_duplicates=skip_duplicates,
+        custom_columns=used_schema["headers"],
+        col_types=used_schema["col_types"],
+        policy_col=used_schema["policy_col"],
+        expiry_col=used_schema["expiry_col"],
+        keep_vba=keep_vba,
+    )
+    if not ok:
+        return False, "", f"❌ {err_msg}", skipped_cnt, file_name
+
+    if added_cnt == 0:
+        msg = f"✅ {mode_tag}: Koi nayi entry add nahi hui ({skipped_cnt} duplicates pehle se '{file_name}' me saved the)."
+        return True, msg, "", skipped_cnt, file_name
+
+    up_res = call_backend({
+        "action": "update_drive_excel",
+        "file_id": file_id,
+        "mime_type": mime_type,
+        "content_b64": base64.b64encode(updated_bytes).decode("ascii"),
+    }, timeout=120)
+
+    if up_res.get("success"):
+        msg = (
+            f"✅ {mode_tag} Direct Excel Save: **{added_cnt}** nayi entries seedha Google Drive Excel "
+            f"`{file_name}` (Tab: `{used_tab}`) me purani entries ke neeche save ho gayi! "
+            f"(Total Entries: **{total_cnt}** — Google Drive PC par apne aap sync ho jayega!)"
+        )
+        return True, msg, "", skipped_cnt, file_name
+    return False, "", f"❌ Google Drive Excel update fail: {up_res.get('message', 'Unknown error')}", skipped_cnt, file_name
 
 
 def load_local_excel_path():
@@ -189,6 +298,9 @@ def save_and_record_batch(
     is_direct_sheet,
     mode2_target_type,
     skip_duplicates,
+    drive_target_url="",
+    drive_target_tab="",
+    is_mode3_excel_slot=False,
     move_msg="",
 ):
     projected_rows, used_schema = project_rows_to_schema(
@@ -219,29 +331,25 @@ def save_and_record_batch(
             else:
                 save_error = f"❌ {msg}"
         else:
-            with st.spinner("Aapki Linked Policy Entry Google Sheet me purani entry ke neeche direct save ho raha hai..."):
-                g_res = call_backend({
-                    "action": "append_to_fixed_sheet",
-                    "user_id": st.session_state.user_id,
-                    "sheet_url": st.session_state.fixed_sheet_url,
-                    "sheet_tab": st.session_state.fixed_sheet_tab,
-                    "skip_duplicates": skip_duplicates,
-                    "custom_columns": used_schema["headers"],
-                    "col_types": used_schema["col_types"],
-                    "policy_col": used_schema["policy_col"],
-                    "expiry_col": used_schema["expiry_col"],
-                    "rows": projected_rows,
-                })
-            if g_res.get("success"):
-                skipped_count = g_res.get("skipped", 0)
-                added_cnt = g_res.get("added", 0)
-                s_name = g_res.get("sheet_name", "Fixed Sheet")
-                t_name = g_res.get("tab_name", st.session_state.fixed_sheet_tab)
-                tot_cnt = g_res.get("total_rows", "")
-                st.session_state.fixed_sheet_name = s_name
-                save_msg = f"✅ {mode_tag} Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt})"
+            with st.spinner("Aapki Linked Google Drive Excel / Sheet me purani entry ke neeche direct save ho raha hai..."):
+                ok, s_msg, s_err, skipped_cnt, resolved_name = save_rows_to_drive_target(
+                    target_url=drive_target_url,
+                    target_tab=drive_target_tab,
+                    projected_rows=projected_rows,
+                    used_schema=used_schema,
+                    skip_duplicates=skip_duplicates,
+                    mode_tag=mode_tag,
+                )
+            skipped_count = skipped_cnt
+            if resolved_name:
+                if is_mode3_excel_slot:
+                    st.session_state.mode3_excel_name = resolved_name
+                else:
+                    st.session_state.fixed_sheet_name = resolved_name
+            if ok:
+                save_msg = s_msg
             else:
-                save_error = f"❌ Fixed Google Sheet save fail: {g_res.get('message', 'Unknown error')}"
+                save_error = s_err
     else:
         if st.session_state.saved_health_rows is None:
             st.session_state.saved_health_rows = []
@@ -354,6 +462,9 @@ defaults = {
     "fixed_sheet_url": "",
     "fixed_sheet_tab": "Policy Entries",
     "fixed_sheet_name": "",
+    "mode3_excel_url": "",
+    "mode3_excel_tab": "",
+    "mode3_excel_name": "",
     "client_master_url": "",
     "client_master_tab": "",
     "client_master_sheet_name": "",
@@ -379,7 +490,7 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 
-# --- AUTO-RESTORE GOOGLE LOGIN (PERSISTENT ACROSS REFRESH & BROWSER RESTART) ---
+# --- AUTO-RESTORE GOOGLE LOGIN ---
 google_configured = is_google_auth_configured()
 google_logged_in, g_email, g_name = get_google_user_info()
 
@@ -468,13 +579,14 @@ if not st.session_state.logged_in:
 
 # --- MAIN POLICY ENTRY DASHBOARD ---
 else:
-    # Load permanent linked sheets, folders & custom columns once after login
     if not st.session_state.settings_loaded:
-        with st.spinner("Aapki linked sheets, folders aur custom columns load ho rahe hain..."):
+        with st.spinner("Aapki linked sheets, Excel file aur folders load ho rahe hain..."):
             cfg = load_user_sheet_settings(st.session_state.user_id)
             l_path, l_tab = load_local_excel_path()
             st.session_state.fixed_sheet_url = cfg["fixed_sheet_url"]
             st.session_state.fixed_sheet_tab = cfg["fixed_sheet_tab"]
+            st.session_state.mode3_excel_url = cfg["mode3_excel_url"]
+            st.session_state.mode3_excel_tab = cfg["mode3_excel_tab"]
             st.session_state.client_master_url = cfg["client_master_url"]
             st.session_state.client_master_tab = cfg["client_master_tab"]
             st.session_state.health_custom_columns = cfg["health_custom_columns"]
@@ -508,7 +620,7 @@ else:
         email_line = f"  \n📧 `{st.session_state.user_email}`" if st.session_state.user_email else ""
         st.success(f"👤 **{display_user}**{email_line}  \n📅 Valid Till: **{st.session_state.expiry}**")
 
-        if st.session_state.health_folder_url:
+        if st.session_state.health_folder_url or st.session_state.mode3_excel_url:
             default_mode_idx = 2
         elif st.session_state.fixed_sheet_url or st.session_state.local_excel_path:
             default_mode_idx = 1
@@ -519,8 +631,8 @@ else:
             "⚙️ Working Mode",
             [
                 "Mode 1: Cloud Portal (Excel Download)",
-                "Mode 2: Fixed Sheet (Manual Upload)",
-                "Mode 3: Drive Auto-Folder (Zero Upload)",
+                "Mode 2: Fixed Google Sheet (Upload)",
+                "Mode 3: Drive Folder + Drive Excel (.xlsx)",
             ],
             index=default_mode_idx,
         )
@@ -536,8 +648,79 @@ else:
 
         st.divider()
 
-        # 1. GOOGLE DRIVE AUTO-FOLDERS PANEL (FOR MODE 3 — HEALTH / MOTOR / SME)
+        # 1. MODE 3: PERMANENT GOOGLE DRIVE EXCEL (.xlsx) LINKER
         if is_mode3:
+            is_m3_excel_linked = bool(st.session_state.mode3_excel_url)
+            m3x_badge = "✅ Linked" if is_m3_excel_linked else "⚪ Not Linked"
+
+            with st.expander(f"📊 Mode 3 Drive Excel ({m3x_badge})", expanded=not is_m3_excel_linked):
+                if is_m3_excel_linked:
+                    ex_title = f"**{st.session_state.mode3_excel_name}**  \n" if st.session_state.mode3_excel_name else ""
+                    tab_disp = st.session_state.mode3_excel_tab or "1st Tab (Auto)"
+                    st.success(
+                        f"{ex_title}📑 Tab: `{tab_disp}`  \n"
+                        f"Direct in-place `.xlsx` auto-save active!"
+                    )
+                    if st.session_state.mode3_excel_url.startswith("http"):
+                        st.link_button(
+                            "🔗 Open Drive Excel File",
+                            st.session_state.mode3_excel_url,
+                            use_container_width=True,
+                        )
+                    if st.button("🔓 Unlink Drive Excel", use_container_width=True, key="unlink_m3_excel"):
+                        with st.spinner("Unlink ho raha hai..."):
+                            u_res = save_user_sheet_settings(
+                                st.session_state.user_id,
+                                mode3_excel_url="",
+                                mode3_excel_tab="",
+                            )
+                        if u_res.get("success"):
+                            st.session_state.mode3_excel_url = ""
+                            st.session_state.mode3_excel_tab = ""
+                            st.session_state.mode3_excel_name = ""
+                            st.rerun()
+                        else:
+                            st.error(u_res.get("message", "Unlink nahi ho paya."))
+                else:
+                    m3_url_inp = st.text_input(
+                        "Google Drive Excel (.xlsx) Link",
+                        placeholder="https://drive.google.com/file/d/.../view",
+                        key="m3_excel_url_input",
+                    )
+                    m3_tab_inp = st.text_input(
+                        "Excel Sheet Tab (Blank = 1st Tab)",
+                        value="",
+                        key="m3_excel_tab_input",
+                    )
+                    if st.button("🔗 Link Drive Excel Permanently", type="primary", use_container_width=True, key="btn_link_m3_excel"):
+                        clean_u = m3_url_inp.strip()
+                        clean_t = m3_tab_inp.strip()
+                        if not clean_u:
+                            st.warning("Apni Google Drive `.xlsx` Excel file ka Share Link dalein.")
+                        else:
+                            with st.spinner("Google Drive Excel verify & link ho rahi hai..."):
+                                v_res = call_backend({
+                                    "action": "verify_sheet",
+                                    "sheet_url": clean_u,
+                                })
+                                if not v_res.get("success"):
+                                    st.error(v_res.get("message", "Excel file access nahi ho payi."))
+                                else:
+                                    s_res = save_user_sheet_settings(
+                                        st.session_state.user_id,
+                                        mode3_excel_url=clean_u,
+                                        mode3_excel_tab=clean_t,
+                                    )
+                                    if s_res.get("success"):
+                                        st.session_state.mode3_excel_url = clean_u
+                                        st.session_state.mode3_excel_tab = clean_t
+                                        st.session_state.mode3_excel_name = v_res.get("sheet_name", "")
+                                        st.rerun()
+                                    else:
+                                        st.error(s_res.get("message", "Save nahi ho paya."))
+                    st.caption("💡 Google Drive me `.xlsx` file par Right-click → Share (Editor) → Copy link yahan paste karein.")
+
+            # MODE 3: DRIVE AUTO-FOLDERS PANEL
             linked_f_cnt = sum([
                 bool(st.session_state.health_folder_url),
                 bool(st.session_state.motor_folder_url),
@@ -547,8 +730,7 @@ else:
 
             with st.expander(f"📁 Drive Auto-Folders ({f_badge})", expanded=not bool(st.session_state.health_folder_url)):
                 st.caption(
-                    "Main parent folder (`MEDICLAIM` / `MOTOR` / `SME`) ya direct month folder (`NOVEMBER 2026`) ka link 1 baar dalein.  \n"
-                    "💡 Main folder link karne par software har mahine apne aap `Year → Month` khol lega!"
+                    "Main parent folder (`MEDICLAIM` / `MOTOR` / `SME`) ya direct month folder (`NOVEMBER 2026`) ka link 1 baar dalein."
                 )
                 ft_health, ft_motor, ft_sme = st.tabs(["🏥 Health", "🚗 Motor", "🏢 SME"])
 
@@ -617,14 +799,14 @@ else:
                                             else:
                                                 st.error(s_res.get("message", "Save nahi ho paya."))
 
-        # 2. POLICY ENTRY SHEET PANEL (FOR MODE 2 & MODE 3)
-        if is_direct_sheet:
+        # 2. MODE 2: POLICY ENTRY SHEET PANEL (Supports Google Sheet OR Drive Excel)
+        if is_mode2:
             is_policy_linked = bool(st.session_state.fixed_sheet_url or (not IS_CLOUD and st.session_state.local_excel_path))
             ps_badge = "✅ Linked" if is_policy_linked else "⚪ Not Linked"
 
             with st.expander(f"🎯 Policy Entry Sheet ({ps_badge})", expanded=not is_policy_linked):
-                target_options = ["☁️ Google Sheet (24x7 Online)"]
-                if not IS_CLOUD and is_mode2:
+                target_options = ["☁️ Google Sheet / Drive Excel"]
+                if not IS_CLOUD:
                     target_options.insert(0, "💻 Local PC Excel (.xlsx)")
 
                 chosen_target = st.radio(
@@ -699,7 +881,7 @@ else:
                                 st.error(u_res.get("message", "Unlink nahi ho paya."))
                     else:
                         sheet_url_input = st.text_input(
-                            "Policy Sheet URL / ID",
+                            "Policy Sheet / Drive Excel URL",
                             placeholder="https://docs.google.com/spreadsheets/d/...",
                             key="policy_sheet_url_input",
                         )
@@ -712,7 +894,7 @@ else:
                             clean_url = sheet_url_input.strip()
                             clean_tab = sheet_tab_input.strip() or "Policy Entries"
                             if not clean_url:
-                                st.warning("Google Sheet URL dalein.")
+                                st.warning("Google Sheet ya Drive Excel URL dalein.")
                             else:
                                 with st.spinner("Verify & link ho raha hai..."):
                                     v_res = call_backend({
@@ -720,7 +902,7 @@ else:
                                         "sheet_url": clean_url,
                                     })
                                     if not v_res.get("success"):
-                                        st.error(v_res.get("message", "Sheet access nahi ho payi."))
+                                        st.error(v_res.get("message", "File access nahi ho payi."))
                                     else:
                                         s_res = save_user_sheet_settings(
                                             st.session_state.user_id,
@@ -734,7 +916,7 @@ else:
                                             st.rerun()
                                         else:
                                             st.error(s_res.get("message", "Save nahi ho paya."))
-                        st.caption("💡 Sheet ko Editor permission ke saath share karein.")
+                        st.caption("💡 File ko Editor permission ke saath share karein.")
 
         # 3. CLIENT MASTER PANEL (SIDEBAR)
         m_df = st.session_state.linked_master_df
@@ -843,16 +1025,14 @@ else:
                 "• Header rename: `Client Name => Insured Name`"
             )
 
-            if is_direct_sheet and mode2_target_type == "google_sheet" and st.session_state.fixed_sheet_url:
-                if st.button("📥 Linked Sheet se Headers Import Karein", use_container_width=True, key="import_sheet_hdrs"):
-                    with st.spinner("Sheet ke Row 1 headers padh rahe hain..."):
-                        h_res = call_backend({
-                            "action": "get_sheet_headers",
-                            "sheet_url": st.session_state.fixed_sheet_url,
-                            "sheet_tab": st.session_state.fixed_sheet_tab,
-                        })
-                    if h_res.get("success") and h_res.get("headers"):
-                        imported_spec = normalize_custom_columns_spec("\n".join(h_res["headers"]))
+            import_src_url = st.session_state.mode3_excel_url if is_mode3 else st.session_state.fixed_sheet_url
+            import_src_tab = st.session_state.mode3_excel_tab if is_mode3 else st.session_state.fixed_sheet_tab
+            if is_direct_sheet and mode2_target_type == "google_sheet" and import_src_url:
+                if st.button("📥 Linked Sheet/Excel se Headers Import Karein", use_container_width=True, key="import_sheet_hdrs"):
+                    with st.spinner("Row 1 headers padh rahe hain..."):
+                        imp_hdrs, imp_err = fetch_headers_from_drive_target(import_src_url, import_src_tab)
+                    if imp_hdrs:
+                        imported_spec = normalize_custom_columns_spec("\n".join(imp_hdrs))
                         s_res = save_user_sheet_settings(
                             st.session_state.user_id,
                             health_custom_columns=imported_spec,
@@ -864,7 +1044,7 @@ else:
                         else:
                             st.error(s_res.get("message", "Save nahi ho paya."))
                     else:
-                        st.warning(h_res.get("message", "Sheet ki Row 1 khali hai — neeche manually columns paste karke Save karein."))
+                        st.warning(imp_err or "Row 1 khali hai — neeche manually columns paste karke Save karein.")
 
             cols_text = st.text_area(
                 "Apne Columns (1 per line)",
@@ -931,13 +1111,19 @@ else:
         st.stop()
 
     # 1-Line Compact Status Bar
-    if is_direct_sheet:
+    if is_mode3:
+        m3_nm = st.session_state.mode3_excel_name or "Drive Excel (.xlsx)"
+        ps_status = f"✅ `{m3_nm}`" if st.session_state.mode3_excel_url else "⚠️ Not Linked"
+        ps_label = "Drive Excel"
+    elif is_mode2:
+        ps_label = "Policy Sheet"
         if mode2_target_type == "local_excel":
             ps_status = f"✅ `{os.path.basename(st.session_state.local_excel_path)}`" if st.session_state.local_excel_path else "⚠️ Not Linked"
         else:
             ps_name = st.session_state.fixed_sheet_name or st.session_state.fixed_sheet_tab
             ps_status = f"✅ `{ps_name}`" if st.session_state.fixed_sheet_url else "⚠️ Not Linked"
     else:
+        ps_label = "Policy Sheet"
         ps_status = "☁️ Mode 1 Cloud Sheet"
 
     if st.session_state.client_master_url:
@@ -948,20 +1134,19 @@ else:
         cm_status = "⚪ Not Linked"
 
     cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
-    mode_short = "Mode 3 (Drive Auto-Folder)" if is_mode3 else ("Mode 2 (Auto-Save)" if is_mode2 else "Mode 1 (Download)")
+    mode_short = "Mode 3 (Drive Excel + Folder)" if is_mode3 else ("Mode 2 (Google Sheet)" if is_mode2 else "Mode 1 (Download)")
     folder_part = ""
     if is_mode3:
         scan_inf = st.session_state.drive_scan_info or {}
         hf_nm = scan_inf.get("active_path") or st.session_state.health_folder_name or "Health Folder"
         hf_status = f"✅ `{hf_nm}`" if st.session_state.health_folder_url else "⚠️ Not Linked"
-        folder_part = f"  |  **Drive Folder:** {hf_status}"
+        folder_part = f"  |  **PDF Folder:** {hf_status}"
 
     st.caption(
         f"**Mode:** {mode_short}{folder_part}  |  "
-        f"**Policy Sheet:** {ps_status}  |  **Client Master:** {cm_status}  |  **Format:** {cols_status}"
+        f"**{ps_label}:** {ps_status}  |  **Client Master:** {cm_status}  |  **Format:** {cols_status}"
     )
 
-    # Load Mode 1 saved rows once if needed
     if is_mode1 and st.session_state.saved_health_rows is None:
         with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
             loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
@@ -970,14 +1155,20 @@ else:
                 st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
 
     # ==========================================================
-    # MODE 3 WORKSPACE: GOOGLE DRIVE AUTO-FOLDER (ZERO UPLOAD)
+    # MODE 3 WORKSPACE: GOOGLE DRIVE FOLDER + DRIVE EXCEL (.xlsx)
     # ==========================================================
     if is_mode3:
         active_folder_url = st.session_state.health_folder_url
+        active_m3_excel_url = st.session_state.mode3_excel_url
+
+        if not active_m3_excel_url:
+            st.warning(
+                "📊 Pehle Left Sidebar → **📊 Mode 3 Drive Excel** me apni Google Drive wali `.xlsx` Excel file ka Share Link 1 baar save karein."
+            )
 
         if not active_folder_url:
             st.warning(
-                "📁 Mode 3 shuru karne ke liye pehle Left Sidebar → **📁 Drive Auto-Folders → 🏥 Health** me apna "
+                "📁 PDF auto-scan ke liye Left Sidebar → **📁 Drive Auto-Folders → 🏥 Health** me apna "
                 "**`MEDICLAIM`** main folder (ya direct `NOVEMBER 2026` folder) link karein."
             )
         else:
@@ -1018,7 +1209,6 @@ else:
                     st.session_state.drive_last_scan_key = ""
                     st.rerun()
 
-            # Smart Year / Month Picker (auto-shown when main parent folder like MEDICLAIM -> 2026 -> NOVEMBER 2026 is linked)
             avail_years = info.get("available_years", [])
             avail_months = info.get("available_months", [])
             if avail_years:
@@ -1102,13 +1292,13 @@ else:
                             )
 
                         if st.button(
-                            f"🚀 Process {len(target_files)} PDFs from Google Drive (Direct Sheet Save)",
+                            f"🚀 Process {len(target_files)} PDFs & Direct Save in Drive Excel (.xlsx)",
                             type="primary",
                             use_container_width=True,
                             key="start_mode3_btn",
                         ):
-                            if not st.session_state.fixed_sheet_url:
-                                st.warning("Mode 3 me direct entry ke liye pehle Left Sidebar se apni **🎯 Policy Entry Sheet** link karein.")
+                            if not active_m3_excel_url:
+                                st.warning("Mode 3 ke liye pehle Left Sidebar → **📊 Mode 3 Drive Excel** me apni Google Drive `.xlsx` file link karein.")
                             else:
                                 master_df = get_active_master_df(manual_master_file)
                                 extracted_rows = []
@@ -1194,10 +1384,13 @@ else:
                                     error_files=error_files,
                                     error_details=error_details,
                                     debug_list=debug_list,
-                                    mode_tag="Mode 3 (Drive)",
+                                    mode_tag="Mode 3 (Drive Excel)",
                                     is_direct_sheet=True,
                                     mode2_target_type="google_sheet",
                                     skip_duplicates=skip_duplicates_m3,
+                                    drive_target_url=active_m3_excel_url,
+                                    drive_target_tab=st.session_state.mode3_excel_tab,
+                                    is_mode3_excel_slot=True,
                                     move_msg=sort_msg,
                                 )
 
@@ -1282,6 +1475,9 @@ else:
                     is_direct_sheet=is_mode2,
                     mode2_target_type=mode2_target_type,
                     skip_duplicates=skip_duplicates,
+                    drive_target_url=st.session_state.fixed_sheet_url,
+                    drive_target_tab=st.session_state.fixed_sheet_tab,
+                    is_mode3_excel_slot=False,
                 )
 
                 st.session_state.pdf_uploader_key += 1
@@ -1335,7 +1531,7 @@ else:
             st.subheader("📋 Is Round me Add Hui Entries (Preview)")
             st.dataframe(pd.DataFrame(res["batch_rows"], columns=preview_cols), use_container_width=True, hide_index=True)
 
-    # --- LAST 5 ROUNDS PDF DOWNLOAD HISTORY ---
+    # --- LAST 5 ROUNDS DOWNLOAD HISTORY ---
     if st.session_state.batch_history:
         with st.expander(
             f"🗂️ Last {len(st.session_state.batch_history)} Rounds Download History (Max {MAX_PDF_ROUNDS} Rounds)",
