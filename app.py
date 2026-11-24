@@ -17,6 +17,7 @@ from health_parser import (
     process_health_pdf,
     build_excel_bytes,
     build_sample_master_bytes,
+    build_sample_accounts_master_bytes,
     read_excel_headers_from_bytes,
     append_rows_to_excel_bytes,
     append_rows_to_local_excel,
@@ -63,6 +64,12 @@ def load_user_sheet_settings(user_id):
             "sme_folder_url": res.get("sme_folder_url", ""),
             "mode3_excel_url": res.get("mode3_excel_url", ""),
             "mode3_excel_tab": res.get("mode3_excel_tab", ""),
+            "health_accounts_url": res.get("health_accounts_url", ""),
+            "health_accounts_tab": res.get("health_accounts_tab", ""),
+            "motor_accounts_url": res.get("motor_accounts_url", ""),
+            "motor_accounts_tab": res.get("motor_accounts_tab", ""),
+            "sme_accounts_url": res.get("sme_accounts_url", ""),
+            "sme_accounts_tab": res.get("sme_accounts_tab", ""),
         }
     return {
         "fixed_sheet_url": "",
@@ -75,6 +82,12 @@ def load_user_sheet_settings(user_id):
         "sme_folder_url": "",
         "mode3_excel_url": "",
         "mode3_excel_tab": "",
+        "health_accounts_url": "",
+        "health_accounts_tab": "",
+        "motor_accounts_url": "",
+        "motor_accounts_tab": "",
+        "sme_accounts_url": "",
+        "sme_accounts_tab": "",
     }
 
 
@@ -97,6 +110,46 @@ def fetch_linked_client_master(sheet_url, sheet_tab=""):
     headers = res.get("headers", [])
     rows = res.get("rows", [])
     sheet_name = res.get("sheet_name", "Client Master Sheet")
+    if not headers:
+        return pd.DataFrame(), sheet_name, ""
+    df = pd.DataFrame(rows, columns=headers, dtype=str)
+    return df, sheet_name, ""
+
+
+def fetch_linked_accounts_master(sheet_url, sheet_tab=""):
+    """Loads Accounts Master from Google Sheet, Published CSV, OR Google Drive Excel (.xlsx/.xlsm)."""
+    if not sheet_url:
+        return None, "", ""
+    res = call_backend({
+        "action": "get_accounts_master",
+        "sheet_url": sheet_url.strip(),
+        "sheet_tab": (sheet_tab or "").strip(),
+    })
+    if not res.get("success"):
+        return None, "", res.get("message", "Accounts Master sheet load nahi ho payi.")
+
+    sheet_name = res.get("sheet_name", "Accounts Master")
+    if res.get("is_excel") and res.get("content_b64"):
+        try:
+            excel_bytes = base64.b64decode(res["content_b64"])
+            tab_req = (sheet_tab or "").strip()
+            if tab_req:
+                df = pd.read_excel(io.BytesIO(excel_bytes), sheet_name=tab_req, dtype=str)
+            else:
+                df = pd.read_excel(io.BytesIO(excel_bytes), dtype=str)
+            df = df.dropna(how="all")
+            cols_low = {str(c).strip().lower() for c in df.columns}
+            has_comp = any(k in cols_low for k in ("company name", "company", "insurer", "insurance company"))
+            has_ag = any(k in cols_low for k in ("agency", "agency name", "intermediary", "agent", "broker"))
+            has_acc = any(k in cols_low for k in ("accounts", "account", "account name"))
+            if not (has_comp and has_ag and has_acc):
+                return None, sheet_name, "Accounts Master me 'Company Name', 'Agency', aur 'Accounts' columns Row 1 me hone chahiye."
+            return df, sheet_name, ""
+        except Exception as e:
+            return None, sheet_name, f"Accounts Master Excel read error: {e}"
+
+    headers = res.get("headers", [])
+    rows = res.get("rows", [])
     if not headers:
         return pd.DataFrame(), sheet_name, ""
     df = pd.DataFrame(rows, columns=headers, dtype=str)
@@ -288,6 +341,23 @@ def get_active_master_df(manual_master_file):
     return None
 
 
+def get_active_accounts_df(cat_key, manual_acc_files):
+    url_key = f"{cat_key}_accounts_url"
+    df_key = f"{cat_key}_accounts_df"
+    if st.session_state.get(url_key) and isinstance(st.session_state.get(df_key), pd.DataFrame):
+        return st.session_state[df_key]
+    up_file = manual_acc_files.get(cat_key)
+    if up_file is not None:
+        try:
+            up_file.seek(0)
+            if up_file.name.lower().endswith(".csv"):
+                return pd.read_csv(up_file, dtype=str)
+            return pd.read_excel(up_file, dtype=str)
+        except Exception as e:
+            st.warning(f"Accounts Master read nahi ho payi ({e}). Bina Accounts Master ke entry kar rahe hain.")
+    return None
+
+
 def save_and_record_batch(
     extracted_rows,
     done_files,
@@ -468,6 +538,21 @@ defaults = {
     "client_master_url": "",
     "client_master_tab": "",
     "client_master_sheet_name": "",
+    "health_accounts_url": "",
+    "health_accounts_tab": "",
+    "health_accounts_name": "",
+    "health_accounts_df": None,
+    "health_accounts_error": "",
+    "motor_accounts_url": "",
+    "motor_accounts_tab": "",
+    "motor_accounts_name": "",
+    "motor_accounts_df": None,
+    "motor_accounts_error": "",
+    "sme_accounts_url": "",
+    "sme_accounts_tab": "",
+    "sme_accounts_name": "",
+    "sme_accounts_df": None,
+    "sme_accounts_error": "",
     "health_custom_columns": "",
     "health_folder_url": "",
     "health_folder_name": "",
@@ -512,6 +597,9 @@ if google_logged_in and g_email and not st.session_state.logged_in:
         st.session_state.settings_loaded = False
         st.session_state.linked_master_df = None
         st.session_state.linked_master_error = ""
+        st.session_state.health_accounts_df = None
+        st.session_state.motor_accounts_df = None
+        st.session_state.sme_accounts_df = None
         st.session_state.drive_scan_info = None
         st.session_state.drive_last_scan_key = ""
         st.session_state.batch_history = []
@@ -568,6 +656,9 @@ if not st.session_state.logged_in:
                             st.session_state.settings_loaded = False
                             st.session_state.linked_master_df = None
                             st.session_state.linked_master_error = ""
+                            st.session_state.health_accounts_df = None
+                            st.session_state.motor_accounts_df = None
+                            st.session_state.sme_accounts_df = None
                             st.session_state.drive_scan_info = None
                             st.session_state.drive_last_scan_key = ""
                             st.session_state.batch_history = []
@@ -580,7 +671,7 @@ if not st.session_state.logged_in:
 # --- MAIN POLICY ENTRY DASHBOARD ---
 else:
     if not st.session_state.settings_loaded:
-        with st.spinner("Aapki linked sheets, Excel file aur folders load ho rahe hain..."):
+        with st.spinner("Aapki linked sheets, Accounts Masters, Excel file aur folders load ho rahe hain..."):
             cfg = load_user_sheet_settings(st.session_state.user_id)
             l_path, l_tab = load_local_excel_path()
             st.session_state.fixed_sheet_url = cfg["fixed_sheet_url"]
@@ -593,6 +684,12 @@ else:
             st.session_state.health_folder_url = cfg["health_folder_url"]
             st.session_state.motor_folder_url = cfg["motor_folder_url"]
             st.session_state.sme_folder_url = cfg["sme_folder_url"]
+            st.session_state.health_accounts_url = cfg["health_accounts_url"]
+            st.session_state.health_accounts_tab = cfg["health_accounts_tab"]
+            st.session_state.motor_accounts_url = cfg["motor_accounts_url"]
+            st.session_state.motor_accounts_tab = cfg["motor_accounts_tab"]
+            st.session_state.sme_accounts_url = cfg["sme_accounts_url"]
+            st.session_state.sme_accounts_tab = cfg["sme_accounts_tab"]
             st.session_state.local_excel_path = l_path
             st.session_state.local_sheet_name = l_tab
 
@@ -605,6 +702,15 @@ else:
                 st.session_state.client_master_sheet_name = m_name
                 st.session_state.linked_master_error = m_err
 
+            for ck in ("health", "motor", "sme"):
+                acc_url = st.session_state[f"{ck}_accounts_url"]
+                acc_tab = st.session_state[f"{ck}_accounts_tab"]
+                if acc_url:
+                    a_df, a_name, a_err = fetch_linked_accounts_master(acc_url, acc_tab)
+                    st.session_state[f"{ck}_accounts_df"] = a_df
+                    st.session_state[f"{ck}_accounts_name"] = a_name
+                    st.session_state[f"{ck}_accounts_error"] = a_err
+
             st.session_state.settings_loaded = True
 
     active_schema = get_custom_schema_info(st.session_state.health_custom_columns)
@@ -613,6 +719,7 @@ else:
 
     mode2_target_type = "google_sheet"
     manual_master_file = None
+    manual_acc_files = {"health": None, "motor": None, "sme": None}
 
     # --- SIDEBAR ---
     with st.sidebar:
@@ -1015,13 +1122,130 @@ else:
                         key="client_master_uploader",
                     )
 
-        # 4. CUSTOM SHEET COLUMNS PANEL
+        # 4. ACCOUNTS MASTER PANEL (SEPARATE FOR HEALTH / MOTOR / SME)
+        acc_linked_cnt = sum([
+            bool(st.session_state.health_accounts_url),
+            bool(st.session_state.motor_accounts_url),
+            bool(st.session_state.sme_accounts_url),
+        ])
+        acc_badge = f"✅ {acc_linked_cnt}/3 Linked" if acc_linked_cnt > 0 else "⚪ Not Linked"
+
+        with st.expander(f"🏦 Accounts Master ({acc_badge})", expanded=False):
+            st.caption(
+                "Health, Motor aur SME teeno ke liye alag-alag Accounts Master sheet (`Company Name`, `Agency`, `Accounts`) link karein."
+            )
+            at_health, at_motor, at_sme = st.tabs(["🏥 Health", "🚗 Motor", "🏢 SME"])
+
+            acc_categories = [
+                (at_health, "Health", "health"),
+                (at_motor, "Motor", "motor"),
+                (at_sme, "SME", "sme"),
+            ]
+
+            for tab_ui, cat_label, ck in acc_categories:
+                with tab_ui:
+                    u_key = f"{ck}_accounts_url"
+                    t_key = f"{ck}_accounts_tab"
+                    n_key = f"{ck}_accounts_name"
+                    d_key = f"{ck}_accounts_df"
+                    e_key = f"{ck}_accounts_error"
+
+                    curr_url = st.session_state[u_key]
+                    curr_df = st.session_state[d_key]
+                    curr_err = st.session_state[e_key]
+                    rule_cnt = len(curr_df) if isinstance(curr_df, pd.DataFrame) else 0
+
+                    if curr_url:
+                        a_title = st.session_state[n_key] or f"{cat_label} Accounts Master"
+                        if curr_err:
+                            st.error(f"⚠️ {curr_err}")
+                        else:
+                            tab_info = f"  \n📑 Tab: `{st.session_state[t_key]}`" if st.session_state[t_key] else ""
+                            st.success(f"**{a_title}**{tab_info}  \n🏦 **{rule_cnt} Rules Loaded**")
+
+                        ac1, ac2 = st.columns(2)
+                        with ac1:
+                            if st.button("🔄 Refresh", use_container_width=True, key=f"refresh_acc_{ck}"):
+                                with st.spinner(f"{cat_label} Accounts refresh ho raha hai..."):
+                                    a_df, a_name, a_err = fetch_linked_accounts_master(curr_url, st.session_state[t_key])
+                                    st.session_state[d_key] = a_df
+                                    st.session_state[n_key] = a_name
+                                    st.session_state[e_key] = a_err
+                                st.rerun()
+                        with ac2:
+                            if st.button("🔓 Unlink", use_container_width=True, key=f"unlink_acc_{ck}"):
+                                with st.spinner("Unlink ho raha hai..."):
+                                    u_res = save_user_sheet_settings(
+                                        st.session_state.user_id,
+                                        **{u_key: "", t_key: ""},
+                                    )
+                                if u_res.get("success"):
+                                    st.session_state[u_key] = ""
+                                    st.session_state[t_key] = ""
+                                    st.session_state[n_key] = ""
+                                    st.session_state[d_key] = None
+                                    st.session_state[e_key] = ""
+                                    st.rerun()
+                                else:
+                                    st.error(u_res.get("message", "Unlink nahi ho paya."))
+
+                        if curr_url.startswith("http"):
+                            st.link_button(
+                                f"🔗 Open {cat_label} Accounts",
+                                curr_url,
+                                use_container_width=True,
+                            )
+                    else:
+                        src_t1, src_t2 = st.tabs(["🔗 Sheet / Drive Excel", "📤 File"])
+                        with src_t1:
+                            a_url_inp = st.text_input(
+                                f"{cat_label} Accounts Sheet/Excel URL",
+                                placeholder="https://docs.google.com/spreadsheets/d/...",
+                                key=f"inp_acc_url_{ck}",
+                            )
+                            a_tab_inp = st.text_input(
+                                "Tab Name (Blank = 1st Tab)",
+                                value="",
+                                key=f"inp_acc_tab_{ck}",
+                            )
+                            if st.button(f"🔗 Link {cat_label} Accounts", type="primary", use_container_width=True, key=f"btn_link_acc_{ck}"):
+                                clean_au = a_url_inp.strip()
+                                clean_at = a_tab_inp.strip()
+                                if not clean_au:
+                                    st.warning(f"{cat_label} Accounts Master link dalein.")
+                                else:
+                                    with st.spinner(f"{cat_label} Accounts Master verify & link ho raha hai..."):
+                                        a_df, a_name, a_err = fetch_linked_accounts_master(clean_au, clean_at)
+                                        if a_err:
+                                            st.error(a_err)
+                                        else:
+                                            s_res = save_user_sheet_settings(
+                                                st.session_state.user_id,
+                                                **{u_key: clean_au, t_key: clean_at},
+                                            )
+                                            if s_res.get("success"):
+                                                st.session_state[u_key] = clean_au
+                                                st.session_state[t_key] = clean_at
+                                                st.session_state[n_key] = a_name
+                                                st.session_state[d_key] = a_df
+                                                st.session_state[e_key] = ""
+                                                st.rerun()
+                                            else:
+                                                st.error(s_res.get("message", "Save nahi ho paya."))
+                        with src_t2:
+                            manual_acc_files[ck] = st.file_uploader(
+                                f"Upload {cat_label} Accounts (.xlsx / .csv)",
+                                type=["xlsx", "csv"],
+                                key=f"upload_acc_{ck}",
+                            )
+
+        # 5. CUSTOM SHEET COLUMNS PANEL
         col_badge = f"Custom: {len(active_headers)}" if is_custom_cols else f"Default: {len(OUTPUT_COLUMNS)}"
         with st.expander(f"🛠️ Sheet Columns ({col_badge})", expanded=False):
             st.caption(
                 "Har line me 1 column likhein (exact order me).  \n"
-                "• Auto-fill fields: Client Name, Policy Number, Occupation, etc.  \n"
-                "• Manual/Blank column: Bas naam likh dein (e.g. `Accounts`, `Mail`, `Print`)  \n"
+                "• Auto-fill fields: Client Name, Policy Number, Occupation, Accounts, etc.  \n"
+                "• Manual/Blank column: Bas naam likh dein (e.g. `Mail`, `Print`, `Folder`)  \n"
                 "• Header rename: `Client Name => Insured Name`"
             )
 
@@ -1093,6 +1317,13 @@ else:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+        st.download_button(
+            "🏦 Sample Accounts Master",
+            data=build_sample_accounts_master_bytes(),
+            file_name="Sample_Accounts_Master.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
         if st.button("🚪 Logout", use_container_width=True):
             was_google = st.session_state.auth_method == "google"
             for k, v in defaults.items():
@@ -1107,7 +1338,10 @@ else:
     st.title("📄 Automatic Policy Entry Portal")
 
     if policy_category != "Health Insurance":
-        st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein (aap abhi se sidebar me Motor/SME Drive Folder link karke rakh sakte hain).")
+        st.info(
+            f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein "
+            f"(aap abhi se sidebar me Motor/SME Drive Folder aur Accounts Master link karke rakh sakte hain)."
+        )
         st.stop()
 
     # 1-Line Compact Status Bar
@@ -1133,6 +1367,15 @@ else:
     else:
         cm_status = "⚪ Not Linked"
 
+    h_acc_df = st.session_state.health_accounts_df
+    h_acc_cnt = len(h_acc_df) if isinstance(h_acc_df, pd.DataFrame) else 0
+    if st.session_state.health_accounts_url:
+        acc_status = f"✅ {h_acc_cnt} Rules" if not st.session_state.health_accounts_error else "⚠️ Error"
+    elif manual_acc_files["health"] is not None:
+        acc_status = f"📄 `{manual_acc_files['health'].name}`"
+    else:
+        acc_status = "⚪ Not Linked"
+
     cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
     mode_short = "Mode 3 (Drive Excel + Folder)" if is_mode3 else ("Mode 2 (Google Sheet)" if is_mode2 else "Mode 1 (Download)")
     folder_part = ""
@@ -1144,7 +1387,8 @@ else:
 
     st.caption(
         f"**Mode:** {mode_short}{folder_part}  |  "
-        f"**{ps_label}:** {ps_status}  |  **Client Master:** {cm_status}  |  **Format:** {cols_status}"
+        f"**{ps_label}:** {ps_status}  |  **Client Master:** {cm_status}  |  "
+        f"**Accounts Master:** {acc_status}  |  **Format:** {cols_status}"
     )
 
     if is_mode1 and st.session_state.saved_health_rows is None:
@@ -1301,6 +1545,7 @@ else:
                                 st.warning("Mode 3 ke liye pehle Left Sidebar → **📊 Mode 3 Drive Excel** me apni Google Drive `.xlsx` file link karein.")
                             else:
                                 master_df = get_active_master_df(manual_master_file)
+                                accounts_df = get_active_accounts_df("health", manual_acc_files)
                                 extracted_rows = []
                                 done_files = []
                                 error_files = []
@@ -1334,7 +1579,12 @@ else:
                                         continue
 
                                     pdf_bytes = base64.b64decode(dl_res["content_b64"])
-                                    row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df)
+                                    row_dict, is_ok, err_msg, debug_info = process_health_pdf(
+                                        fname,
+                                        pdf_bytes,
+                                        master_df,
+                                        accounts_df=accounts_df,
+                                    )
                                     debug_list.append(debug_info)
                                     extracted_rows.append(row_dict)
 
@@ -1438,6 +1688,7 @@ else:
                 st.warning("Mode 2 ke liye pehle Left Sidebar se apni Fixed Local Excel (.xlsx) file ka path link karein.")
             else:
                 master_df = get_active_master_df(manual_master_file)
+                accounts_df = get_active_accounts_df("health", manual_acc_files)
                 extracted_rows = []
                 done_files = []
                 error_files = []
@@ -1450,7 +1701,12 @@ else:
                 for idx, pdf in enumerate(uploaded_pdfs):
                     status_text.text(f"Processing ({idx + 1}/{len(uploaded_pdfs)}): {pdf.name}")
                     pdf_bytes = pdf.read()
-                    row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df)
+                    row_dict, is_ok, err_msg, debug_info = process_health_pdf(
+                        pdf.name,
+                        pdf_bytes,
+                        master_df,
+                        accounts_df=accounts_df,
+                    )
                     debug_list.append(debug_info)
                     extracted_rows.append(row_dict)
 
