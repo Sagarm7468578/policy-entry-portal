@@ -196,103 +196,70 @@ else:
 
             st.session_state.settings_loaded = True
 
-    with st.sidebar:
-        st.success(f"👤 User: **{st.session_state.user_id}**")
-        st.info(f"📅 Plan Valid Till: **{st.session_state.expiry}**")
-        st.divider()
+    mode2_target_type = "google_sheet"
+    manual_master_file = None
 
-        default_mode_idx = 1 if st.session_state.fixed_sheet_url else 0
+    # --- SIDEBAR (SETTINGS + POLICY SHEET LINK + CLIENT MASTER LINK) ---
+    with st.sidebar:
+        st.success(f"👤 **{st.session_state.user_id}**  \n📅 Valid Till: **{st.session_state.expiry}**")
+
+        default_mode_idx = 1 if (st.session_state.fixed_sheet_url or st.session_state.local_excel_path) else 0
         working_mode = st.radio(
-            "⚙️ Working Mode Chunein",
+            "⚙️ Working Mode",
             [
                 "Mode 1: Cloud Portal (Excel Download)",
-                "Mode 2: Fixed Excel / Sheet Auto-Entry (No Download)",
+                "Mode 2: Fixed Sheet Auto-Entry (No Download)",
             ],
             index=default_mode_idx,
         )
         is_mode2 = working_mode.startswith("Mode 2")
 
-        st.divider()
         policy_category = st.selectbox(
-            "Policy Type Chunein",
+            "📂 Policy Type",
             ["Health Insurance", "Motor Insurance (Coming Soon)", "SME Insurance (Coming Soon)"]
         )
 
         st.divider()
-        st.caption("🔗 Permanent Link Status:")
-        st.write(f"• Policy Sheet: {'✅ Linked' if st.session_state.fixed_sheet_url else '⚪ Not Linked'}")
-        st.write(f"• Client Master: {'✅ Linked' if st.session_state.client_master_url else '⚪ Not Linked'}")
 
-        st.divider()
-        st.download_button(
-            "📋 Sample Client Master Download",
-            data=build_sample_master_bytes(),
-            file_name="Sample_Client_Master.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        if st.button("Logout", use_container_width=True):
-            for k, v in defaults.items():
-                st.session_state[k] = v
-            st.session_state.pop("last_results", None)
-            st.rerun()
+        # 1. POLICY ENTRY SHEET PANEL (SIDEBAR)
+        if is_mode2:
+            is_policy_linked = bool(st.session_state.fixed_sheet_url or (not IS_CLOUD and st.session_state.local_excel_path))
+            ps_badge = "✅ Linked" if is_policy_linked else "⚪ Not Linked"
 
-    st.title("📄 Automatic Policy Entry Portal (24x7)")
+            with st.expander(f"🎯 Policy Entry Sheet ({ps_badge})", expanded=not is_policy_linked):
+                target_options = ["☁️ Google Sheet (24x7 Online)"]
+                if not IS_CLOUD:
+                    target_options.insert(0, "💻 Local PC Excel (.xlsx)")
 
-    if policy_category != "Health Insurance":
-        st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein.")
-        st.stop()
+                chosen_target = st.radio(
+                    "Save Destination",
+                    target_options,
+                    key="sidebar_mode2_target",
+                )
 
-    # Load Mode 1 saved rows once if needed
-    if not is_mode2 and st.session_state.saved_health_rows is None:
-        with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
-            loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
-            st.session_state.saved_health_rows = loaded_rows
-            if load_err:
-                st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
-
-    # --- MODE 2 CONFIGURATION PANEL (POLICY ENTRY SHEET PERMANENT LINK / UNLINK) ---
-    mode2_target_type = "google_sheet"
-    if is_mode2:
-        with st.container(border=True):
-            st.subheader("🎯 Mode 2 — Policy Entry Sheet Auto-Save (Zero Download)")
-
-            target_options = ["☁️ Fixed Google Sheet (Online Website par 24x7 chalega)"]
-            if not IS_CLOUD:
-                target_options.insert(0, "💻 Direct Local PC Excel (.xlsx) — Seedha PC File me Entry")
-
-            chosen_target = st.radio(
-                "Entry kahan directly save karni hai?",
-                target_options,
-                horizontal=True,
-            )
-
-            if chosen_target.startswith("💻"):
-                mode2_target_type = "local_excel"
-                if st.session_state.local_excel_path:
-                    c_i, c_u = st.columns([4, 1])
-                    with c_i:
+                if chosen_target.startswith("💻"):
+                    mode2_target_type = "local_excel"
+                    if st.session_state.local_excel_path:
                         st.success(
-                            f"✅ **Local Excel Linked:** `{st.session_state.local_excel_path}` "
-                            f"(Tab: `{st.session_state.local_sheet_name}`)"
+                            f"**Local Excel Linked**  \n"
+                            f"`{os.path.basename(st.session_state.local_excel_path)}`  \n"
+                            f"📑 Tab: `{st.session_state.local_sheet_name}`"
                         )
-                    with c_u:
                         if st.button("🔓 Unlink Excel", use_container_width=True, key="unlink_local_excel"):
                             st.session_state.local_excel_path = ""
                             save_local_excel_path("", "Policy Entries")
                             st.rerun()
-                else:
-                    c_p1, c_p2, c_p3 = st.columns([3, 1.2, 1])
-                    with c_p1:
+                    else:
                         local_path_input = st.text_input(
-                            "Fixed Excel File Path (.xlsx)",
-                            placeholder=r"e.g. I:\My Drive\POLICY ENTRY EXCEL\POLICY ENTRY SHEET FOR HEALTH.xlsx",
+                            "Fixed Excel Path (.xlsx)",
+                            placeholder=r"I:\My Drive\POLICY ENTRY EXCEL\HEALTH.xlsx",
+                            key="sb_local_path_input",
                         )
-                    with c_p2:
-                        local_tab_input = st.text_input("Sheet Tab Name", value="Policy Entries")
-                    with c_p3:
-                        st.write("")
-                        st.write("")
+                        local_tab_input = st.text_input(
+                            "Sheet Tab Name",
+                            value="Policy Entries",
+                            key="sb_local_tab_input",
+                        )
                         if st.button("🔗 Link Path", type="primary", use_container_width=True):
                             clean_p = local_path_input.strip().strip('"')
                             if not clean_p:
@@ -302,28 +269,24 @@ else:
                                 st.session_state.local_sheet_name = local_tab_input.strip() or "Policy Entries"
                                 save_local_excel_path(clean_p, st.session_state.local_sheet_name)
                                 st.rerun()
-            else:
-                mode2_target_type = "google_sheet"
-                if st.session_state.fixed_sheet_url:
-                    title_txt = (
-                        f" — **{st.session_state.fixed_sheet_name}**"
-                        if st.session_state.fixed_sheet_name
-                        else ""
-                    )
-                    st.success(
-                        f"✅ **Policy Entry Google Sheet Permanently Linked!**{title_txt}  \n"
-                        f"📑 Tab: `{st.session_state.fixed_sheet_tab}` | "
-                        f"Ab baar-baar link dalne ya Excel download karne ki zaroorat nahi."
-                    )
-                    b1, b2, _ = st.columns([1.4, 1.4, 2.2])
-                    with b1:
+                else:
+                    mode2_target_type = "google_sheet"
+                    if st.session_state.fixed_sheet_url:
+                        title_txt = (
+                            f"**{st.session_state.fixed_sheet_name}**  \n"
+                            if st.session_state.fixed_sheet_name
+                            else ""
+                        )
+                        st.success(
+                            f"{title_txt}📑 Tab: `{st.session_state.fixed_sheet_tab}`  \n"
+                            f"Auto-save active (Zero download)"
+                        )
                         if st.session_state.fixed_sheet_url.startswith("http"):
                             st.link_button(
                                 "🔗 Open Policy Sheet",
                                 st.session_state.fixed_sheet_url,
-                                use_container_width=True
+                                use_container_width=True,
                             )
-                    with b2:
                         if st.button("🔓 Unlink Policy Sheet", use_container_width=True, key="unlink_policy_gsheet"):
                             with st.spinner("Unlink kar rahe hain..."):
                                 u_res = save_user_sheet_settings(
@@ -338,30 +301,24 @@ else:
                                 st.rerun()
                             else:
                                 st.error(u_res.get("message", "Unlink nahi ho paya."))
-                else:
-                    c_g1, c_g2, c_g3 = st.columns([3, 1.2, 1.2])
-                    with c_g1:
+                    else:
                         sheet_url_input = st.text_input(
-                            "Policy Entry Google Sheet ka URL ya Sheet ID dalein (1-Time Link)",
-                            placeholder="https://docs.google.com/spreadsheets/d/xxxxx/edit",
+                            "Policy Sheet URL / ID",
+                            placeholder="https://docs.google.com/spreadsheets/d/...",
                             key="policy_sheet_url_input",
                         )
-                    with c_g2:
                         sheet_tab_input = st.text_input(
                             "Sheet Tab Name",
                             value=st.session_state.fixed_sheet_tab or "Policy Entries",
                             key="policy_sheet_tab_input",
                         )
-                    with c_g3:
-                        st.write("")
-                        st.write("")
                         if st.button("🔗 Link Policy Sheet", type="primary", use_container_width=True):
                             clean_url = sheet_url_input.strip()
                             clean_tab = sheet_tab_input.strip() or "Policy Entries"
                             if not clean_url:
-                                st.warning("Pehle Google Sheet ka URL ya ID dalein.")
+                                st.warning("Google Sheet URL dalein.")
                             else:
-                                with st.spinner("Sheet check karke permanently link kar rahe hain..."):
+                                with st.spinner("Verify & link ho raha hai..."):
                                     v_res = call_backend({
                                         "action": "verify_sheet",
                                         "sheet_url": clean_url,
@@ -381,123 +338,169 @@ else:
                                             st.rerun()
                                         else:
                                             st.error(s_res.get("message", "Save nahi ho paya."))
-                    st.caption("💡 Tip: Apni Google Sheet ko `Anyone with the link → Editor` (ya apne admin Gmail par Editor) share kar dein, fir ek baar link karte hi hamesha ke liye linked rahegi.")
+                        st.caption("💡 Sheet ko `Anyone with the link → Editor` share karein.")
 
-    # --- UPLOAD & CLIENT MASTER SECTION ---
-    col_left, col_right = st.columns([1.2, 1.8])
-    manual_master_file = None
-
-    with col_left:
-        st.subheader("1️⃣ Client Master (1-Time Link)")
-        if st.session_state.client_master_url:
-            m_df = st.session_state.linked_master_df
-            m_count = len(m_df) if isinstance(m_df, pd.DataFrame) else 0
-            m_title = st.session_state.client_master_sheet_name or "Client Master Sheet"
-
-            if st.session_state.linked_master_error:
-                st.error(f"⚠️ Linked Client Master load error: {st.session_state.linked_master_error}")
-            else:
-                st.success(
-                    f"✅ **Client Master Linked:** {m_title}  \n"
-                    f"👥 **{m_count} Clients Loaded** (Auto-active har login par)"
-                )
-
-            mc1, mc2 = st.columns(2)
-            with mc1:
-                if st.button("🔄 Refresh Master", use_container_width=True, key="refresh_linked_master"):
-                    with st.spinner("Live Client Master refresh ho rahi hai..."):
-                        m_df, m_name, m_err = fetch_linked_client_master(
-                            st.session_state.client_master_url,
-                            st.session_state.client_master_tab,
-                        )
-                        st.session_state.linked_master_df = m_df
-                        st.session_state.client_master_sheet_name = m_name
-                        st.session_state.linked_master_error = m_err
-                    st.rerun()
-            with mc2:
-                if st.button("🔓 Unlink Master", use_container_width=True, key="unlink_client_master"):
-                    with st.spinner("Client Master unlink kar rahe hain..."):
-                        u_res = save_user_sheet_settings(
-                            st.session_state.user_id,
-                            client_master_url="",
-                            client_master_tab="",
-                        )
-                    if u_res.get("success"):
-                        st.session_state.client_master_url = ""
-                        st.session_state.client_master_tab = ""
-                        st.session_state.client_master_sheet_name = ""
-                        st.session_state.linked_master_df = None
-                        st.session_state.linked_master_error = ""
-                        st.rerun()
-                    else:
-                        st.error(u_res.get("message", "Unlink nahi ho paya."))
-
-            if st.session_state.client_master_url.startswith("http"):
-                st.link_button(
-                    "🔗 Open Client Master Sheet",
-                    st.session_state.client_master_url,
-                    use_container_width=True
-                )
-        else:
-            cm_tab1, cm_tab2 = st.tabs(["🔗 Link Google Sheet", "📤 Upload Excel/CSV"])
-            with cm_tab1:
-                cm_url_input = st.text_input(
-                    "Client Master Google Sheet URL / CSV Link",
-                    placeholder="https://docs.google.com/spreadsheets/d/xxxxx/edit",
-                    key="cm_url_input",
-                )
-                cm_tab_input = st.text_input(
-                    "Tab Name (Blank chhodein = 1st Tab)",
-                    value="",
-                    key="cm_tab_input",
-                )
-                if st.button("🔗 Link Client Master Sheet", type="primary", use_container_width=True):
-                    clean_cm_url = cm_url_input.strip()
-                    clean_cm_tab = cm_tab_input.strip()
-                    if not clean_cm_url:
-                        st.warning("Pehle Client Master Google Sheet ka link dalein.")
-                    else:
-                        with st.spinner("Client Master verify aur permanently link ho rahi hai..."):
-                            m_df, m_name, m_err = fetch_linked_client_master(clean_cm_url, clean_cm_tab)
-                            if m_err:
-                                st.error(m_err)
-                            else:
-                                s_res = save_user_sheet_settings(
-                                    st.session_state.user_id,
-                                    client_master_url=clean_cm_url,
-                                    client_master_tab=clean_cm_tab,
-                                )
-                                if s_res.get("success"):
-                                    st.session_state.client_master_url = clean_cm_url
-                                    st.session_state.client_master_tab = clean_cm_tab
-                                    st.session_state.client_master_sheet_name = m_name
-                                    st.session_state.linked_master_df = m_df
-                                    st.session_state.linked_master_error = ""
-                                    st.rerun()
-                                else:
-                                    st.error(s_res.get("message", "Save nahi ho paya."))
-            with cm_tab2:
-                manual_master_file = st.file_uploader(
-                    "One-time Client Master Excel/CSV upload karein",
-                    type=["xlsx", "csv"],
-                    key="client_master_uploader"
-                )
-
-    with col_right:
-        hdr1, hdr2 = st.columns([3, 1])
-        with hdr1:
-            st.subheader("2️⃣ Policy PDFs Upload Karein")
-        with hdr2:
-            if st.button("🗑️ Clear All PDFs", use_container_width=True):
-                st.session_state.pdf_uploader_key += 1
-                st.rerun()
-
-        uploaded_pdfs = st.file_uploader(
-            "Ek ya ek se zyada Health Policy PDF select karein",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key=f"pdf_uploader_{st.session_state.pdf_uploader_key}"
+        # 2. CLIENT MASTER PANEL (SIDEBAR)
+        m_df = st.session_state.linked_master_df
+        m_count = len(m_df) if isinstance(m_df, pd.DataFrame) else 0
+        is_cm_linked = bool(st.session_state.client_master_url)
+        cm_badge = f"✅ {m_count} Clients" if (is_cm_linked and not st.session_state.linked_master_error) else (
+            "⚠️ Error" if is_cm_linked else "⚪ Not Linked"
         )
+
+        with st.expander(f"👥 Client Master ({cm_badge})", expanded=not is_cm_linked):
+            if is_cm_linked:
+                m_title = st.session_state.client_master_sheet_name or "Client Master Sheet"
+                if st.session_state.linked_master_error:
+                    st.error(f"⚠️ {st.session_state.linked_master_error}")
+                else:
+                    st.success(f"**{m_title}**  \n👥 **{m_count} Clients Loaded**")
+
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    if st.button("🔄 Refresh", use_container_width=True, key="refresh_linked_master"):
+                        with st.spinner("Refresh ho raha hai..."):
+                            m_df, m_name, m_err = fetch_linked_client_master(
+                                st.session_state.client_master_url,
+                                st.session_state.client_master_tab,
+                            )
+                            st.session_state.linked_master_df = m_df
+                            st.session_state.client_master_sheet_name = m_name
+                            st.session_state.linked_master_error = m_err
+                        st.rerun()
+                with mc2:
+                    if st.button("🔓 Unlink", use_container_width=True, key="unlink_client_master"):
+                        with st.spinner("Unlink ho raha hai..."):
+                            u_res = save_user_sheet_settings(
+                                st.session_state.user_id,
+                                client_master_url="",
+                                client_master_tab="",
+                            )
+                        if u_res.get("success"):
+                            st.session_state.client_master_url = ""
+                            st.session_state.client_master_tab = ""
+                            st.session_state.client_master_sheet_name = ""
+                            st.session_state.linked_master_df = None
+                            st.session_state.linked_master_error = ""
+                            st.rerun()
+                        else:
+                            st.error(u_res.get("message", "Unlink nahi ho paya."))
+
+                if st.session_state.client_master_url.startswith("http"):
+                    st.link_button(
+                        "🔗 Open Client Master",
+                        st.session_state.client_master_url,
+                        use_container_width=True,
+                    )
+            else:
+                cm_tab1, cm_tab2 = st.tabs(["🔗 Google Sheet", "📤 File"])
+                with cm_tab1:
+                    cm_url_input = st.text_input(
+                        "Client Master Sheet URL",
+                        placeholder="https://docs.google.com/spreadsheets/d/...",
+                        key="cm_url_input",
+                    )
+                    cm_tab_input = st.text_input(
+                        "Tab Name (Blank = 1st Tab)",
+                        value="",
+                        key="cm_tab_input",
+                    )
+                    if st.button("🔗 Link Master Sheet", type="primary", use_container_width=True):
+                        clean_cm_url = cm_url_input.strip()
+                        clean_cm_tab = cm_tab_input.strip()
+                        if not clean_cm_url:
+                            st.warning("Client Master link dalein.")
+                        else:
+                            with st.spinner("Verify & link ho raha hai..."):
+                                m_df, m_name, m_err = fetch_linked_client_master(clean_cm_url, clean_cm_tab)
+                                if m_err:
+                                    st.error(m_err)
+                                else:
+                                    s_res = save_user_sheet_settings(
+                                        st.session_state.user_id,
+                                        client_master_url=clean_cm_url,
+                                        client_master_tab=clean_cm_tab,
+                                    )
+                                    if s_res.get("success"):
+                                        st.session_state.client_master_url = clean_cm_url
+                                        st.session_state.client_master_tab = clean_cm_tab
+                                        st.session_state.client_master_sheet_name = m_name
+                                        st.session_state.linked_master_df = m_df
+                                        st.session_state.linked_master_error = ""
+                                        st.rerun()
+                                    else:
+                                        st.error(s_res.get("message", "Save nahi ho paya."))
+                with cm_tab2:
+                    manual_master_file = st.file_uploader(
+                        "Upload Master (.xlsx / .csv)",
+                        type=["xlsx", "csv"],
+                        key="client_master_uploader",
+                    )
+
+        st.divider()
+        st.download_button(
+            "📋 Sample Client Master",
+            data=build_sample_master_bytes(),
+            file_name="Sample_Client_Master.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        if st.button("Logout", use_container_width=True):
+            for k, v in defaults.items():
+                st.session_state[k] = v
+            st.session_state.pop("last_results", None)
+            st.rerun()
+
+    # --- CLEAN MAIN WORKSPACE (MINIMUM SCROLLING) ---
+    st.title("📄 Automatic Policy Entry Portal")
+
+    if policy_category != "Health Insurance":
+        st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein.")
+        st.stop()
+
+    # 1-Line Compact Status Bar
+    if is_mode2:
+        if mode2_target_type == "local_excel":
+            ps_status = f"✅ `{os.path.basename(st.session_state.local_excel_path)}`" if st.session_state.local_excel_path else "⚠️ Not Linked (Sidebar se link karein)"
+        else:
+            ps_name = st.session_state.fixed_sheet_name or st.session_state.fixed_sheet_tab
+            ps_status = f"✅ `{ps_name}`" if st.session_state.fixed_sheet_url else "⚠️ Not Linked (Sidebar se link karein)"
+    else:
+        ps_status = "☁️ Mode 1 Cloud Sheet"
+
+    if st.session_state.client_master_url:
+        cm_status = f"✅ {m_count} Clients Linked" if not st.session_state.linked_master_error else "⚠️ Link Error"
+    elif manual_master_file is not None:
+        cm_status = f"📄 `{manual_master_file.name}`"
+    else:
+        cm_status = "⚪ Not Linked"
+
+    st.caption(f"**Mode:** {'Mode 2 (Auto-Save)' if is_mode2 else 'Mode 1 (Download)'}  |  **Policy Sheet:** {ps_status}  |  **Client Master:** {cm_status}")
+
+    # Load Mode 1 saved rows once if needed
+    if not is_mode2 and st.session_state.saved_health_rows is None:
+        with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
+            loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
+            st.session_state.saved_health_rows = loaded_rows
+            if load_err:
+                st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
+
+    # --- PDF UPLOAD AREA RIGHT AT THE TOP ---
+    hdr1, hdr2 = st.columns([4, 1])
+    with hdr1:
+        st.subheader("📤 Policy PDFs Upload Karein")
+    with hdr2:
+        if st.button("🗑️ Clear All PDFs", use_container_width=True):
+            st.session_state.pdf_uploader_key += 1
+            st.rerun()
+
+    uploaded_pdfs = st.file_uploader(
+        "Ek ya ek se zyada Health Policy PDF select karein",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key=f"pdf_uploader_{st.session_state.pdf_uploader_key}",
+        label_visibility="collapsed",
+    )
 
     skip_duplicates = st.checkbox(
         "Duplicate Policy auto-skip karein (Agar same Policy Number + Expiry Date pehle se sheet me saved ho)",
@@ -505,7 +508,7 @@ else:
     )
 
     btn_label = (
-        "🚀 Start Policy Entry (Mode 2: Direct Fixed Excel/Sheet me Save Karein)"
+        "🚀 Start Policy Entry (Mode 2: Direct Fixed Sheet me Save Karein)"
         if is_mode2
         else "🚀 Start Policy Entry (Mode 1: Cloud Portal)"
     )
@@ -514,11 +517,10 @@ else:
         if not uploaded_pdfs:
             st.warning("Pehle kam se kam ek Policy PDF upload karein.")
         elif is_mode2 and mode2_target_type == "google_sheet" and not st.session_state.fixed_sheet_url:
-            st.warning("Mode 2 ke liye pehle upar apni Policy Entry Google Sheet link karein.")
+            st.warning("Mode 2 ke liye pehle Left Sidebar se apni Policy Entry Google Sheet link karein.")
         elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
-            st.warning("Mode 2 ke liye pehle upar apni Fixed Local Excel (.xlsx) file ka path link karein.")
+            st.warning("Mode 2 ke liye pehle Left Sidebar se apni Fixed Local Excel (.xlsx) file ka path link karein.")
         else:
-            # Priority: Permanently Linked Google Sheet Master -> else Manual uploaded file
             master_df = None
             if st.session_state.client_master_url and isinstance(st.session_state.linked_master_df, pd.DataFrame):
                 master_df = st.session_state.linked_master_df
