@@ -3,6 +3,12 @@ from health_parsers import COMPANY_PARSERS
 from health_parsers.common import (
     IST,
     OUTPUT_COLUMNS,
+    ALL_SYSTEM_FIELDS,
+    parse_custom_columns,
+    normalize_custom_columns_spec,
+    spec_to_multiline,
+    get_custom_schema_info,
+    project_rows_to_schema,
     extract_pdf_text,
     get_company_scores,
     fmt_date,
@@ -21,7 +27,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
     today_ist = datetime.now(IST).replace(tzinfo=None)
     entry_date = fmt_date(today_ist)
 
-    base_row = {col: "" for col in OUTPUT_COLUMNS}
+    base_row = {col: "" for col in ALL_SYSTEM_FIELDS}
     base_row["Insurance Type"] = "HEALTH INSURANCE"
     base_row["Date of Entry"] = entry_date
 
@@ -81,6 +87,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
         base_row.update({
             "Client Name": extracted["client_name"],
             "Client Code": master_info["client_code"],
+            "Occupation": master_info["occupation"],
             "Mobile": master_info["mobile"],
             "Mail Id": master_info["mail_id"],
             "Policy Number": str(extracted["policy_number"]),
