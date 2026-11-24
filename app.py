@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -30,10 +31,10 @@ IS_CLOUD = os.path.exists("/mount/src")
 LOCAL_CONFIG_FILE = "mode2_local_config.json"
 
 
-def call_backend(payload):
+def call_backend(payload, timeout=90):
     payload["secret"] = SECRET_KEY
     try:
-        res = requests.post(WEB_APP_URL, json=payload, timeout=60)
+        res = requests.post(WEB_APP_URL, json=payload, timeout=timeout)
         return res.json()
     except Exception as e:
         return {"success": False, "message": f"Connection error: {e}"}
@@ -55,6 +56,9 @@ def load_user_sheet_settings(user_id):
             "client_master_url": res.get("client_master_url", ""),
             "client_master_tab": res.get("client_master_tab", ""),
             "health_custom_columns": res.get("health_custom_columns", ""),
+            "health_folder_url": res.get("health_folder_url", ""),
+            "motor_folder_url": res.get("motor_folder_url", ""),
+            "sme_folder_url": res.get("sme_folder_url", ""),
         }
     return {
         "fixed_sheet_url": "",
@@ -62,6 +66,9 @@ def load_user_sheet_settings(user_id):
         "client_master_url": "",
         "client_master_tab": "",
         "health_custom_columns": "",
+        "health_folder_url": "",
+        "motor_folder_url": "",
+        "sme_folder_url": "",
     }
 
 
@@ -88,6 +95,31 @@ def fetch_linked_client_master(sheet_url, sheet_tab=""):
         return pd.DataFrame(), sheet_name, ""
     df = pd.DataFrame(rows, columns=headers, dtype=str)
     return df, sheet_name, ""
+
+
+def scan_drive_folder_pdfs(user_id, folder_url, year_folder="", month_folder=""):
+    if not folder_url:
+        return None, "Drive folder link nahi hai."
+    res = call_backend({
+        "action": "list_drive_pdfs",
+        "user_id": user_id,
+        "folder_url": folder_url.strip(),
+        "year_folder": (year_folder or "").strip(),
+        "month_folder": (month_folder or "").strip(),
+    })
+    if not res.get("success"):
+        return None, res.get("message", "Google Drive folder scan nahi ho paya.")
+    return {
+        "root_folder_name": res.get("root_folder_name", ""),
+        "active_folder_id": res.get("active_folder_id", ""),
+        "active_folder_name": res.get("active_folder_name", "Drive Folder"),
+        "active_path": res.get("active_path", res.get("active_folder_name", "Drive Folder")),
+        "available_years": res.get("available_years", []),
+        "available_months": res.get("available_months", []),
+        "selected_year": res.get("selected_year", ""),
+        "selected_month": res.get("selected_month", ""),
+        "files": res.get("files", []),
+    }, ""
 
 
 def load_local_excel_path():
@@ -133,6 +165,177 @@ def get_google_user_info():
     return False, "", ""
 
 
+def get_active_master_df(manual_master_file):
+    if st.session_state.client_master_url and isinstance(st.session_state.linked_master_df, pd.DataFrame):
+        return st.session_state.linked_master_df
+    if manual_master_file is not None:
+        try:
+            manual_master_file.seek(0)
+            if manual_master_file.name.lower().endswith(".csv"):
+                return pd.read_csv(manual_master_file, dtype=str)
+            return pd.read_excel(manual_master_file, dtype=str)
+        except Exception as e:
+            st.warning(f"Client Master read nahi ho payi ({e}). Bina master ke entry kar rahe hain.")
+    return None
+
+
+def save_and_record_batch(
+    extracted_rows,
+    done_files,
+    error_files,
+    error_details,
+    debug_list,
+    mode_tag,
+    is_direct_sheet,
+    mode2_target_type,
+    skip_duplicates,
+    move_msg="",
+):
+    projected_rows, used_schema = project_rows_to_schema(
+        extracted_rows,
+        st.session_state.health_custom_columns,
+    )
+
+    save_msg = ""
+    save_error = ""
+    skipped_count = 0
+
+    if is_direct_sheet:
+        if mode2_target_type == "local_excel":
+            with st.spinner("Fixed Local Excel (.xlsx) me purani entry ke neeche save ho raha hai..."):
+                ok, msg, added, skipped, total_cnt = append_rows_to_local_excel(
+                    st.session_state.local_excel_path,
+                    projected_rows,
+                    sheet_name=st.session_state.local_sheet_name,
+                    skip_duplicates=skip_duplicates,
+                    custom_columns=used_schema["headers"],
+                    col_types=used_schema["col_types"],
+                    policy_col=used_schema["policy_col"],
+                    expiry_col=used_schema["expiry_col"],
+                )
+            skipped_count = skipped
+            if ok:
+                save_msg = f"✅ {mode_tag} Direct Save: {msg} (Total Entries in Excel: {total_cnt})"
+            else:
+                save_error = f"❌ {msg}"
+        else:
+            with st.spinner("Aapki Linked Policy Entry Google Sheet me purani entry ke neeche direct save ho raha hai..."):
+                g_res = call_backend({
+                    "action": "append_to_fixed_sheet",
+                    "user_id": st.session_state.user_id,
+                    "sheet_url": st.session_state.fixed_sheet_url,
+                    "sheet_tab": st.session_state.fixed_sheet_tab,
+                    "skip_duplicates": skip_duplicates,
+                    "custom_columns": used_schema["headers"],
+                    "col_types": used_schema["col_types"],
+                    "policy_col": used_schema["policy_col"],
+                    "expiry_col": used_schema["expiry_col"],
+                    "rows": projected_rows,
+                })
+            if g_res.get("success"):
+                skipped_count = g_res.get("skipped", 0)
+                added_cnt = g_res.get("added", 0)
+                s_name = g_res.get("sheet_name", "Fixed Sheet")
+                t_name = g_res.get("tab_name", st.session_state.fixed_sheet_tab)
+                tot_cnt = g_res.get("total_rows", "")
+                st.session_state.fixed_sheet_name = s_name
+                save_msg = f"✅ {mode_tag} Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt})"
+            else:
+                save_error = f"❌ Fixed Google Sheet save fail: {g_res.get('message', 'Unknown error')}"
+    else:
+        if st.session_state.saved_health_rows is None:
+            st.session_state.saved_health_rows = []
+        existing_keys = set()
+        for r in st.session_state.saved_health_rows:
+            pno = str(r.get("Policy Number", "")).strip().lstrip(",")
+            exp = str(r.get("Expiry Date", "")).strip()
+            if pno:
+                existing_keys.add((pno, exp))
+
+        new_rows_to_save = []
+        for row_dict in extracted_rows:
+            pno = str(row_dict.get("Policy Number", "")).strip().lstrip(",")
+            exp = str(row_dict.get("Expiry Date", "")).strip()
+            key = (pno, exp)
+            if skip_duplicates and pno and key in existing_keys:
+                skipped_count += 1
+            else:
+                new_rows_to_save.append(row_dict)
+                if pno:
+                    existing_keys.add(key)
+
+        if new_rows_to_save:
+            with st.spinner("Nayi entries aapki Mode 1 master sheet me save ho rahi hain..."):
+                save_res = call_backend({
+                    "action": "save_health_entries",
+                    "user_id": st.session_state.user_id,
+                    "rows": new_rows_to_save,
+                })
+            if save_res.get("success"):
+                st.session_state.saved_health_rows.extend(new_rows_to_save)
+                save_msg = f"✅ {len(new_rows_to_save)} nayi entries '{DEFAULT_HEALTH_EXCEL_NAME}' me purani entries ke neeche save ho gayi!"
+            else:
+                st.session_state.saved_health_rows.extend(new_rows_to_save)
+                save_msg = f"⚠️ Cloud save me dikkat aayi ({save_res.get('message', '')}), par entries is session ki sheet me add ho gayi hain."
+
+    if move_msg and save_msg:
+        save_msg = f"{save_msg}  \n{move_msg}"
+    elif move_msg and not save_error:
+        save_msg = move_msg
+
+    all_zip_buf = io.BytesIO()
+    with zipfile.ZipFile(all_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname, fbytes in done_files:
+            zf.writestr(f"Done/{fname}", fbytes)
+        for fname, fbytes in error_files:
+            zf.writestr(f"Error/{fname}", fbytes)
+    all_zip_bytes = all_zip_buf.getvalue()
+
+    err_zip_bytes = None
+    if error_files:
+        err_zip_buf = io.BytesIO()
+        with zipfile.ZipFile(err_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fname, fbytes in error_files:
+                zf.writestr(fname, fbytes)
+        err_zip_bytes = err_zip_buf.getvalue()
+
+    round_excel_bytes = build_excel_bytes(
+        projected_rows,
+        columns=used_schema["headers"],
+        col_types=used_schema["col_types"],
+    )
+
+    now_ist = datetime.now(IST)
+    st.session_state.round_counter += 1
+    round_no = st.session_state.round_counter
+    ts_file = now_ist.strftime("%Y%m%d_%H%M%S")
+    ts_display = now_ist.strftime("%d-%m-%Y %I:%M:%S %p")
+
+    batch_record = {
+        "round_no": round_no,
+        "mode_used": mode_tag,
+        "timestamp": ts_file,
+        "time_display": ts_display,
+        "total_count": len(done_files) + len(error_files),
+        "done_count": len(done_files),
+        "error_count": len(error_files),
+        "skipped_count": skipped_count,
+        "save_msg": save_msg,
+        "save_error": save_error,
+        "batch_rows": projected_rows,
+        "batch_columns": used_schema["headers"],
+        "round_excel_bytes": round_excel_bytes,
+        "error_details": error_details,
+        "debug_list": debug_list,
+        "all_zip_bytes": all_zip_bytes,
+        "err_zip_bytes": err_zip_bytes,
+    }
+
+    st.session_state.batch_history.insert(0, batch_record)
+    st.session_state.batch_history = st.session_state.batch_history[:MAX_PDF_ROUNDS]
+    st.session_state["last_results"] = batch_record
+
+
 # --- SESSION STATE INITIALIZATION ---
 defaults = {
     "logged_in": False,
@@ -155,6 +358,17 @@ defaults = {
     "client_master_tab": "",
     "client_master_sheet_name": "",
     "health_custom_columns": "",
+    "health_folder_url": "",
+    "health_folder_name": "",
+    "motor_folder_url": "",
+    "motor_folder_name": "",
+    "sme_folder_url": "",
+    "sme_folder_name": "",
+    "drive_scan_info": None,
+    "drive_scan_error": "",
+    "drive_last_scan_key": "",
+    "drive_selected_year": "",
+    "drive_selected_month": "",
     "linked_master_df": None,
     "linked_master_error": "",
     "local_excel_path": "",
@@ -187,6 +401,8 @@ if google_logged_in and g_email and not st.session_state.logged_in:
         st.session_state.settings_loaded = False
         st.session_state.linked_master_df = None
         st.session_state.linked_master_error = ""
+        st.session_state.drive_scan_info = None
+        st.session_state.drive_last_scan_key = ""
         st.session_state.batch_history = []
         st.session_state.round_counter = 0
         st.rerun()
@@ -241,6 +457,8 @@ if not st.session_state.logged_in:
                             st.session_state.settings_loaded = False
                             st.session_state.linked_master_df = None
                             st.session_state.linked_master_error = ""
+                            st.session_state.drive_scan_info = None
+                            st.session_state.drive_last_scan_key = ""
                             st.session_state.batch_history = []
                             st.session_state.round_counter = 0
                             st.rerun()
@@ -250,9 +468,9 @@ if not st.session_state.logged_in:
 
 # --- MAIN POLICY ENTRY DASHBOARD ---
 else:
-    # Load permanent linked sheets & custom columns once after login
+    # Load permanent linked sheets, folders & custom columns once after login
     if not st.session_state.settings_loaded:
-        with st.spinner("Aapki linked sheets aur custom columns load ho rahe hain..."):
+        with st.spinner("Aapki linked sheets, folders aur custom columns load ho rahe hain..."):
             cfg = load_user_sheet_settings(st.session_state.user_id)
             l_path, l_tab = load_local_excel_path()
             st.session_state.fixed_sheet_url = cfg["fixed_sheet_url"]
@@ -260,6 +478,9 @@ else:
             st.session_state.client_master_url = cfg["client_master_url"]
             st.session_state.client_master_tab = cfg["client_master_tab"]
             st.session_state.health_custom_columns = cfg["health_custom_columns"]
+            st.session_state.health_folder_url = cfg["health_folder_url"]
+            st.session_state.motor_folder_url = cfg["motor_folder_url"]
+            st.session_state.sme_folder_url = cfg["sme_folder_url"]
             st.session_state.local_excel_path = l_path
             st.session_state.local_sheet_name = l_tab
 
@@ -281,22 +502,32 @@ else:
     mode2_target_type = "google_sheet"
     manual_master_file = None
 
-    # --- SIDEBAR (SETTINGS + POLICY SHEET + CLIENT MASTER + CUSTOM COLUMNS) ---
+    # --- SIDEBAR ---
     with st.sidebar:
         display_user = st.session_state.user_name or st.session_state.user_id
         email_line = f"  \n📧 `{st.session_state.user_email}`" if st.session_state.user_email else ""
         st.success(f"👤 **{display_user}**{email_line}  \n📅 Valid Till: **{st.session_state.expiry}**")
 
-        default_mode_idx = 1 if (st.session_state.fixed_sheet_url or st.session_state.local_excel_path) else 0
+        if st.session_state.health_folder_url:
+            default_mode_idx = 2
+        elif st.session_state.fixed_sheet_url or st.session_state.local_excel_path:
+            default_mode_idx = 1
+        else:
+            default_mode_idx = 0
+
         working_mode = st.radio(
             "⚙️ Working Mode",
             [
                 "Mode 1: Cloud Portal (Excel Download)",
-                "Mode 2: Fixed Sheet Auto-Entry (No Download)",
+                "Mode 2: Fixed Sheet (Manual Upload)",
+                "Mode 3: Drive Auto-Folder (Zero Upload)",
             ],
             index=default_mode_idx,
         )
+        is_mode1 = working_mode.startswith("Mode 1")
         is_mode2 = working_mode.startswith("Mode 2")
+        is_mode3 = working_mode.startswith("Mode 3")
+        is_direct_sheet = is_mode2 or is_mode3
 
         policy_category = st.selectbox(
             "📂 Policy Type",
@@ -305,14 +536,95 @@ else:
 
         st.divider()
 
-        # 1. POLICY ENTRY SHEET PANEL (SIDEBAR)
-        if is_mode2:
+        # 1. GOOGLE DRIVE AUTO-FOLDERS PANEL (FOR MODE 3 — HEALTH / MOTOR / SME)
+        if is_mode3:
+            linked_f_cnt = sum([
+                bool(st.session_state.health_folder_url),
+                bool(st.session_state.motor_folder_url),
+                bool(st.session_state.sme_folder_url),
+            ])
+            f_badge = f"✅ {linked_f_cnt}/3 Linked" if linked_f_cnt > 0 else "⚪ Not Linked"
+
+            with st.expander(f"📁 Drive Auto-Folders ({f_badge})", expanded=not bool(st.session_state.health_folder_url)):
+                st.caption(
+                    "Main parent folder (`MEDICLAIM` / `MOTOR` / `SME`) ya direct month folder (`NOVEMBER 2026`) ka link 1 baar dalein.  \n"
+                    "💡 Main folder link karne par software har mahine apne aap `Year → Month` khol lega!"
+                )
+                ft_health, ft_motor, ft_sme = st.tabs(["🏥 Health", "🚗 Motor", "🏢 SME"])
+
+                folder_tabs = [
+                    (ft_health, "Health", "health_folder_url", "health_folder_name"),
+                    (ft_motor, "Motor", "motor_folder_url", "motor_folder_name"),
+                    (ft_sme, "SME", "sme_folder_url", "sme_folder_name"),
+                ]
+
+                for tab_ui, cat_label, url_key, name_key in folder_tabs:
+                    with tab_ui:
+                        curr_url = st.session_state[url_key]
+                        curr_name = st.session_state[name_key]
+                        if curr_url:
+                            disp_nm = f"**{curr_name}**  \n" if curr_name else ""
+                            st.success(f"{disp_nm}✅ {cat_label} Drive Folder Linked")
+                            if curr_url.startswith("http"):
+                                st.link_button(
+                                    f"🔗 Open {cat_label} Folder",
+                                    curr_url,
+                                    use_container_width=True,
+                                )
+                            if st.button(f"🔓 Unlink {cat_label}", use_container_width=True, key=f"unlink_{url_key}"):
+                                with st.spinner("Unlink ho raha hai..."):
+                                    u_res = save_user_sheet_settings(st.session_state.user_id, **{url_key: ""})
+                                if u_res.get("success"):
+                                    st.session_state[url_key] = ""
+                                    st.session_state[name_key] = ""
+                                    if url_key == "health_folder_url":
+                                        st.session_state.drive_scan_info = None
+                                        st.session_state.drive_last_scan_key = ""
+                                        st.session_state.drive_selected_year = ""
+                                        st.session_state.drive_selected_month = ""
+                                    st.rerun()
+                                else:
+                                    st.error(u_res.get("message", "Unlink nahi ho paya."))
+                        else:
+                            f_inp = st.text_input(
+                                f"{cat_label} Google Drive Folder Link",
+                                placeholder="https://drive.google.com/drive/folders/...",
+                                key=f"inp_{url_key}",
+                            )
+                            if st.button(f"🔗 Link {cat_label} Folder", type="primary", use_container_width=True, key=f"btn_{url_key}"):
+                                clean_f = f_inp.strip()
+                                if not clean_f:
+                                    st.warning("Google Drive Folder link dalein.")
+                                else:
+                                    with st.spinner("Folder verify & link ho raha hai..."):
+                                        v_res = call_backend({
+                                            "action": "verify_drive_folder",
+                                            "folder_url": clean_f,
+                                        })
+                                        if not v_res.get("success"):
+                                            st.error(v_res.get("message", "Folder access nahi ho paya."))
+                                        else:
+                                            s_res = save_user_sheet_settings(st.session_state.user_id, **{url_key: clean_f})
+                                            if s_res.get("success"):
+                                                st.session_state[url_key] = clean_f
+                                                st.session_state[name_key] = v_res.get("folder_name", "")
+                                                if url_key == "health_folder_url":
+                                                    st.session_state.drive_scan_info = None
+                                                    st.session_state.drive_last_scan_key = ""
+                                                    st.session_state.drive_selected_year = ""
+                                                    st.session_state.drive_selected_month = ""
+                                                st.rerun()
+                                            else:
+                                                st.error(s_res.get("message", "Save nahi ho paya."))
+
+        # 2. POLICY ENTRY SHEET PANEL (FOR MODE 2 & MODE 3)
+        if is_direct_sheet:
             is_policy_linked = bool(st.session_state.fixed_sheet_url or (not IS_CLOUD and st.session_state.local_excel_path))
             ps_badge = "✅ Linked" if is_policy_linked else "⚪ Not Linked"
 
             with st.expander(f"🎯 Policy Entry Sheet ({ps_badge})", expanded=not is_policy_linked):
                 target_options = ["☁️ Google Sheet (24x7 Online)"]
-                if not IS_CLOUD:
+                if not IS_CLOUD and is_mode2:
                     target_options.insert(0, "💻 Local PC Excel (.xlsx)")
 
                 chosen_target = st.radio(
@@ -422,9 +734,9 @@ else:
                                             st.rerun()
                                         else:
                                             st.error(s_res.get("message", "Save nahi ho paya."))
-                        st.caption("💡 Sheet ko `Anyone with the link → Editor` share karein.")
+                        st.caption("💡 Sheet ko Editor permission ke saath share karein.")
 
-        # 2. CLIENT MASTER PANEL (SIDEBAR)
+        # 3. CLIENT MASTER PANEL (SIDEBAR)
         m_df = st.session_state.linked_master_df
         m_count = len(m_df) if isinstance(m_df, pd.DataFrame) else 0
         is_cm_linked = bool(st.session_state.client_master_url)
@@ -521,7 +833,7 @@ else:
                         key="client_master_uploader",
                     )
 
-        # 3. CUSTOM SHEET COLUMNS PANEL (USER + ADMIN HYBRID CONTROL)
+        # 4. CUSTOM SHEET COLUMNS PANEL
         col_badge = f"Custom: {len(active_headers)}" if is_custom_cols else f"Default: {len(OUTPUT_COLUMNS)}"
         with st.expander(f"🛠️ Sheet Columns ({col_badge})", expanded=False):
             st.caption(
@@ -531,7 +843,7 @@ else:
                 "• Header rename: `Client Name => Insured Name`"
             )
 
-            if is_mode2 and mode2_target_type == "google_sheet" and st.session_state.fixed_sheet_url:
+            if is_direct_sheet and mode2_target_type == "google_sheet" and st.session_state.fixed_sheet_url:
                 if st.button("📥 Linked Sheet se Headers Import Karein", use_container_width=True, key="import_sheet_hdrs"):
                     with st.spinner("Sheet ke Row 1 headers padh rahe hain..."):
                         h_res = call_backend({
@@ -611,257 +923,369 @@ else:
             else:
                 st.rerun()
 
-    # --- CLEAN MAIN WORKSPACE (MINIMUM SCROLLING) ---
+    # --- CLEAN MAIN WORKSPACE ---
     st.title("📄 Automatic Policy Entry Portal")
 
     if policy_category != "Health Insurance":
-        st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein.")
+        st.info(f"**{policy_category}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein (aap abhi se sidebar me Motor/SME Drive Folder link karke rakh sakte hain).")
         st.stop()
 
     # 1-Line Compact Status Bar
-    if is_mode2:
+    if is_direct_sheet:
         if mode2_target_type == "local_excel":
-            ps_status = f"✅ `{os.path.basename(st.session_state.local_excel_path)}`" if st.session_state.local_excel_path else "⚠️ Not Linked (Sidebar se link karein)"
+            ps_status = f"✅ `{os.path.basename(st.session_state.local_excel_path)}`" if st.session_state.local_excel_path else "⚠️ Not Linked"
         else:
             ps_name = st.session_state.fixed_sheet_name or st.session_state.fixed_sheet_tab
-            ps_status = f"✅ `{ps_name}`" if st.session_state.fixed_sheet_url else "⚠️ Not Linked (Sidebar se link karein)"
+            ps_status = f"✅ `{ps_name}`" if st.session_state.fixed_sheet_url else "⚠️ Not Linked"
     else:
         ps_status = "☁️ Mode 1 Cloud Sheet"
 
     if st.session_state.client_master_url:
-        cm_status = f"✅ {m_count} Clients Linked" if not st.session_state.linked_master_error else "⚠️ Link Error"
+        cm_status = f"✅ {m_count} Clients" if not st.session_state.linked_master_error else "⚠️ Link Error"
     elif manual_master_file is not None:
         cm_status = f"📄 `{manual_master_file.name}`"
     else:
         cm_status = "⚪ Not Linked"
 
     cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
+    mode_short = "Mode 3 (Drive Auto-Folder)" if is_mode3 else ("Mode 2 (Auto-Save)" if is_mode2 else "Mode 1 (Download)")
+    folder_part = ""
+    if is_mode3:
+        scan_inf = st.session_state.drive_scan_info or {}
+        hf_nm = scan_inf.get("active_path") or st.session_state.health_folder_name or "Health Folder"
+        hf_status = f"✅ `{hf_nm}`" if st.session_state.health_folder_url else "⚠️ Not Linked"
+        folder_part = f"  |  **Drive Folder:** {hf_status}"
+
     st.caption(
-        f"**Mode:** {'Mode 2 (Auto-Save)' if is_mode2 else 'Mode 1 (Download)'}  |  "
+        f"**Mode:** {mode_short}{folder_part}  |  "
         f"**Policy Sheet:** {ps_status}  |  **Client Master:** {cm_status}  |  **Format:** {cols_status}"
     )
 
     # Load Mode 1 saved rows once if needed
-    if not is_mode2 and st.session_state.saved_health_rows is None:
+    if is_mode1 and st.session_state.saved_health_rows is None:
         with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
             loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
             st.session_state.saved_health_rows = loaded_rows
             if load_err:
                 st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
 
-    # --- PDF UPLOAD AREA RIGHT AT THE TOP ---
-    hdr1, hdr2 = st.columns([4, 1])
-    with hdr1:
-        st.subheader("📤 Policy PDFs Upload Karein")
-    with hdr2:
-        if st.button("🗑️ Clear All PDFs", use_container_width=True):
-            st.session_state.pdf_uploader_key += 1
-            st.rerun()
+    # ==========================================================
+    # MODE 3 WORKSPACE: GOOGLE DRIVE AUTO-FOLDER (ZERO UPLOAD)
+    # ==========================================================
+    if is_mode3:
+        active_folder_url = st.session_state.health_folder_url
 
-    uploaded_pdfs = st.file_uploader(
-        "Ek ya ek se zyada Health Policy PDF select karein",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key=f"pdf_uploader_{st.session_state.pdf_uploader_key}",
-        label_visibility="collapsed",
-    )
-
-    skip_duplicates = st.checkbox(
-        "Duplicate Policy auto-skip karein (Agar same Policy Number + Expiry Date pehle se sheet me saved ho)",
-        value=True
-    )
-
-    btn_label = (
-        "🚀 Start Policy Entry (Mode 2: Direct Fixed Sheet me Save Karein)"
-        if is_mode2
-        else "🚀 Start Policy Entry (Mode 1: Cloud Portal)"
-    )
-
-    if st.button(btn_label, type="primary", use_container_width=True):
-        if not uploaded_pdfs:
-            st.warning("Pehle kam se kam ek Policy PDF upload karein.")
-        elif is_mode2 and mode2_target_type == "google_sheet" and not st.session_state.fixed_sheet_url:
-            st.warning("Mode 2 ke liye pehle Left Sidebar se apni Policy Entry Google Sheet link karein.")
-        elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
-            st.warning("Mode 2 ke liye pehle Left Sidebar se apni Fixed Local Excel (.xlsx) file ka path link karein.")
-        else:
-            master_df = None
-            if st.session_state.client_master_url and isinstance(st.session_state.linked_master_df, pd.DataFrame):
-                master_df = st.session_state.linked_master_df
-            elif manual_master_file is not None:
-                try:
-                    manual_master_file.seek(0)
-                    if manual_master_file.name.lower().endswith(".csv"):
-                        master_df = pd.read_csv(manual_master_file, dtype=str)
-                    else:
-                        master_df = pd.read_excel(manual_master_file, dtype=str)
-                except Exception as e:
-                    st.warning(f"Client Master read nahi ho payi ({e}). Bina master ke entry kar rahe hain.")
-
-            extracted_rows = []
-            done_files = []
-            error_files = []
-            error_details = []
-            debug_list = []
-
-            progress = st.progress(0)
-            status_text = st.empty()
-
-            for idx, pdf in enumerate(uploaded_pdfs):
-                status_text.text(f"Processing ({idx + 1}/{len(uploaded_pdfs)}): {pdf.name}")
-                pdf_bytes = pdf.read()
-                row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df)
-                debug_list.append(debug_info)
-                extracted_rows.append(row_dict)
-
-                if is_ok:
-                    comp = row_dict["Company Name"].replace(" ", "_")
-                    done_files.append((f"{comp}_{pdf.name}", pdf_bytes))
-                else:
-                    error_files.append((pdf.name, pdf_bytes))
-                    error_details.append({"File Name": pdf.name, "Reason": err_msg})
-
-                progress.progress((idx + 1) / len(uploaded_pdfs))
-
-            status_text.empty()
-            progress.empty()
-
-            # Project rows to user's custom columns (or default 26)
-            projected_rows, used_schema = project_rows_to_schema(
-                extracted_rows,
-                st.session_state.health_custom_columns,
+        if not active_folder_url:
+            st.warning(
+                "📁 Mode 3 shuru karne ke liye pehle Left Sidebar → **📁 Drive Auto-Folders → 🏥 Health** me apna "
+                "**`MEDICLAIM`** main folder (ya direct `NOVEMBER 2026` folder) link karein."
             )
-
-            save_msg = ""
-            save_error = ""
-            skipped_count = 0
-
-            # --- SAVE LOGIC: MODE 2 vs MODE 1 ---
-            if is_mode2:
-                if mode2_target_type == "local_excel":
-                    with st.spinner("Fixed Local Excel (.xlsx) me purani entry ke neeche save ho raha hai..."):
-                        ok, msg, added, skipped, total_cnt = append_rows_to_local_excel(
-                            st.session_state.local_excel_path,
-                            projected_rows,
-                            sheet_name=st.session_state.local_sheet_name,
-                            skip_duplicates=skip_duplicates,
-                            custom_columns=used_schema["headers"],
-                            col_types=used_schema["col_types"],
-                            policy_col=used_schema["policy_col"],
-                            expiry_col=used_schema["expiry_col"],
+        else:
+            desired_scan_key = f"{active_folder_url}||{st.session_state.drive_selected_year}||{st.session_state.drive_selected_month}"
+            if (
+                st.session_state.drive_scan_info is None
+                or st.session_state.drive_last_scan_key != desired_scan_key
+            ):
+                with st.spinner("Google Drive folder scan ho raha hai..."):
+                    info, f_err = scan_drive_folder_pdfs(
+                        st.session_state.user_id,
+                        active_folder_url,
+                        st.session_state.drive_selected_year,
+                        st.session_state.drive_selected_month,
+                    )
+                    st.session_state.drive_scan_info = info
+                    st.session_state.drive_scan_error = f_err
+                    if info:
+                        if info.get("root_folder_name"):
+                            st.session_state.health_folder_name = info["root_folder_name"]
+                        st.session_state.drive_selected_year = info.get("selected_year", "")
+                        st.session_state.drive_selected_month = info.get("selected_month", "")
+                        st.session_state.drive_last_scan_key = (
+                            f"{active_folder_url}||{st.session_state.drive_selected_year}||{st.session_state.drive_selected_month}"
                         )
-                    skipped_count = skipped
-                    if ok:
-                        save_msg = f"✅ Mode 2 Direct Save: {msg} (Total Entries in Excel: {total_cnt}) — Download ki zaroorat nahi!"
                     else:
-                        save_error = f"❌ {msg}"
-                else:
-                    with st.spinner("Aapki Linked Policy Entry Google Sheet me purani entry ke neeche direct save ho raha hai..."):
-                        g_res = call_backend({
-                            "action": "append_to_fixed_sheet",
-                            "user_id": st.session_state.user_id,
-                            "sheet_url": st.session_state.fixed_sheet_url,
-                            "sheet_tab": st.session_state.fixed_sheet_tab,
-                            "skip_duplicates": skip_duplicates,
-                            "custom_columns": used_schema["headers"],
-                            "col_types": used_schema["col_types"],
-                            "policy_col": used_schema["policy_col"],
-                            "expiry_col": used_schema["expiry_col"],
-                            "rows": projected_rows,
-                        })
-                    if g_res.get("success"):
-                        skipped_count = g_res.get("skipped", 0)
-                        added_cnt = g_res.get("added", 0)
-                        s_name = g_res.get("sheet_name", "Fixed Sheet")
-                        t_name = g_res.get("tab_name", st.session_state.fixed_sheet_tab)
-                        tot_cnt = g_res.get("total_rows", "")
-                        st.session_state.fixed_sheet_name = s_name
-                        save_msg = f"✅ Mode 2 Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt}) — Download ki zaroorat nahi!"
+                        st.session_state.drive_last_scan_key = desired_scan_key
+
+            info = st.session_state.drive_scan_info or {}
+
+            hdr1, hdr2 = st.columns([4, 1])
+            with hdr1:
+                disp_path = info.get("active_path") or st.session_state.health_folder_name or "Linked Drive Folder"
+                st.subheader(f"📁 {disp_path}")
+            with hdr2:
+                if st.button("🔄 Scan Folder", use_container_width=True, key="rescan_drive_folder"):
+                    st.session_state.drive_scan_info = None
+                    st.session_state.drive_last_scan_key = ""
+                    st.rerun()
+
+            # Smart Year / Month Picker (auto-shown when main parent folder like MEDICLAIM -> 2026 -> NOVEMBER 2026 is linked)
+            avail_years = info.get("available_years", [])
+            avail_months = info.get("available_months", [])
+            if avail_years:
+                ym1, ym2 = st.columns(2)
+                with ym1:
+                    yr_idx = avail_years.index(info.get("selected_year")) if info.get("selected_year") in avail_years else 0
+                    chosen_yr = st.selectbox("📅 Year Folder", avail_years, index=yr_idx, key="sb_drive_year")
+                with ym2:
+                    if avail_months:
+                        mo_idx = avail_months.index(info.get("selected_month")) if info.get("selected_month") in avail_months else 0
+                        chosen_mo = st.selectbox("📆 Month Folder", avail_months, index=mo_idx, key="sb_drive_month")
                     else:
-                        save_error = f"❌ Fixed Google Sheet save fail: {g_res.get('message', 'Unknown error')}"
+                        chosen_mo = ""
+                        st.caption("Is year folder me koi month subfolder nahi mila.")
+
+                if chosen_yr != info.get("selected_year", ""):
+                    st.session_state.drive_selected_year = chosen_yr
+                    st.session_state.drive_selected_month = ""
+                    st.session_state.drive_scan_info = None
+                    st.rerun()
+                elif avail_months and chosen_mo != info.get("selected_month", ""):
+                    st.session_state.drive_selected_month = chosen_mo
+                    st.session_state.drive_scan_info = None
+                    st.rerun()
+
+            if st.session_state.drive_scan_error:
+                st.error(f"⚠️ {st.session_state.drive_scan_error}")
             else:
-                if st.session_state.saved_health_rows is None:
-                    st.session_state.saved_health_rows = []
-                existing_keys = set()
-                for r in st.session_state.saved_health_rows:
-                    pno = str(r.get("Policy Number", "")).strip().lstrip(",")
-                    exp = str(r.get("Expiry Date", "")).strip()
-                    if pno:
-                        existing_keys.add((pno, exp))
+                all_drive_files = info.get("files", [])
+                new_or_retry_files = [f for f in all_drive_files if f.get("last_status") != "DONE"]
+                already_done_files = [f for f in all_drive_files if f.get("last_status") == "DONE"]
 
-                new_rows_to_save = []
-                for row_dict in extracted_rows:
-                    pno = str(row_dict.get("Policy Number", "")).strip().lstrip(",")
-                    exp = str(row_dict.get("Expiry Date", "")).strip()
-                    key = (pno, exp)
-                    if skip_duplicates and pno and key in existing_keys:
-                        skipped_count += 1
+                if not all_drive_files:
+                    st.info("✅ Is folder me abhi koi PDF file nahi hai. Nayi Health PDFs folder me dalein aur **🔄 Scan Folder** dabayein.")
+                else:
+                    include_done = False
+                    if already_done_files:
+                        st.success(
+                            f"📄 Total Folder PDFs: **{len(all_drive_files)}**  |  "
+                            f"🆕 New / Pending: **{len(new_or_retry_files)}**  |  "
+                            f"✅ Already Entered (Safe in Folder): **{len(already_done_files)}**"
+                        )
+                        include_done = st.checkbox(
+                            f"Already-entered ({len(already_done_files)}) PDFs ko bhi dobara process karein",
+                            value=False,
+                            key="include_done_m3",
+                        )
                     else:
-                        new_rows_to_save.append(row_dict)
-                        if pno:
-                            existing_keys.add(key)
+                        st.success(f"📄 **{len(new_or_retry_files)} Pending PDFs** ready hain (Original PDFs apni jagah safe rahengi!)")
 
-                if new_rows_to_save:
-                    with st.spinner("Nayi entries aapki Mode 1 master sheet me save ho rahi hain..."):
-                        save_res = call_backend({
-                            "action": "save_health_entries",
-                            "user_id": st.session_state.user_id,
-                            "rows": new_rows_to_save,
-                        })
-                    if save_res.get("success"):
-                        st.session_state.saved_health_rows.extend(new_rows_to_save)
-                        save_msg = f"✅ {len(new_rows_to_save)} nayi entries '{DEFAULT_HEALTH_EXCEL_NAME}' me purani entries ke neeche save ho gayi!"
+                    target_files = all_drive_files if include_done else new_or_retry_files
+
+                    with st.expander(f"📋 Folder ki PDFs Dekhein ({len(target_files)} selected / {len(all_drive_files)} total)", expanded=False):
+                        df_pending = pd.DataFrame([
+                            {
+                                "#": i + 1,
+                                "File Name": f["name"],
+                                "Status": "✅ Entered" if f.get("last_status") == "DONE" else ("⚠️ Prev Error" if f.get("last_status") == "ERROR" else "🆕 New"),
+                                "Size (KB)": f.get("size_kb", ""),
+                                "Modified": f.get("updated", ""),
+                            }
+                            for i, f in enumerate(all_drive_files)
+                        ])
+                        st.dataframe(df_pending, use_container_width=True, hide_index=True)
+
+                    if not target_files:
+                        st.info("🎉 Is folder ki saari PDFs pehle hi enter ho chuki hain! Nayi PDF aane par bas **🔄 Scan Folder** dabayein.")
                     else:
-                        st.session_state.saved_health_rows.extend(new_rows_to_save)
-                        save_msg = f"⚠️ Cloud save me dikkat aayi ({save_res.get('message', '')}), par entries is session ki sheet me add ho gayi hain."
+                        opt1, opt2 = st.columns(2)
+                        with opt1:
+                            skip_duplicates_m3 = st.checkbox(
+                                "Duplicate Policy auto-skip karein",
+                                value=True,
+                                key="skip_dup_m3",
+                            )
+                        with opt2:
+                            copy_errors_drive = st.checkbox(
+                                "Error PDFs ki COPY `Error/` folder me bhejein (Original wahi rahegi, Done move nahi hogi)",
+                                value=True,
+                                key="copy_err_m3",
+                            )
 
-            all_zip_buf = io.BytesIO()
-            with zipfile.ZipFile(all_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for fname, fbytes in done_files:
-                    zf.writestr(f"Done/{fname}", fbytes)
-                for fname, fbytes in error_files:
-                    zf.writestr(f"Error/{fname}", fbytes)
-            all_zip_bytes = all_zip_buf.getvalue()
+                        if st.button(
+                            f"🚀 Process {len(target_files)} PDFs from Google Drive (Direct Sheet Save)",
+                            type="primary",
+                            use_container_width=True,
+                            key="start_mode3_btn",
+                        ):
+                            if not st.session_state.fixed_sheet_url:
+                                st.warning("Mode 3 me direct entry ke liye pehle Left Sidebar se apni **🎯 Policy Entry Sheet** link karein.")
+                            else:
+                                master_df = get_active_master_df(manual_master_file)
+                                extracted_rows = []
+                                done_files = []
+                                error_files = []
+                                error_details = []
+                                debug_list = []
+                                done_track_items = []
+                                error_track_items = []
 
-            err_zip_bytes = None
-            if error_files:
-                err_zip_buf = io.BytesIO()
-                with zipfile.ZipFile(err_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for fname, fbytes in error_files:
-                        zf.writestr(fname, fbytes)
-                err_zip_bytes = err_zip_buf.getvalue()
+                                progress = st.progress(0)
+                                status_text = st.empty()
 
-            now_ist = datetime.now(IST)
-            st.session_state.round_counter += 1
-            round_no = st.session_state.round_counter
-            ts_file = now_ist.strftime("%Y%m%d_%H%M%S")
-            ts_display = now_ist.strftime("%d-%m-%Y %I:%M:%S %p")
+                                for idx, f_meta in enumerate(target_files):
+                                    fname = f_meta["name"]
+                                    fid = f_meta["id"]
+                                    status_text.text(f"Drive se read ho raha hai ({idx + 1}/{len(target_files)}): {fname}")
 
-            batch_record = {
-                "round_no": round_no,
-                "mode_used": "Mode 2" if is_mode2 else "Mode 1",
-                "timestamp": ts_file,
-                "time_display": ts_display,
-                "total_count": len(done_files) + len(error_files),
-                "done_count": len(done_files),
-                "error_count": len(error_files),
-                "skipped_count": skipped_count,
-                "save_msg": save_msg,
-                "save_error": save_error,
-                "batch_rows": projected_rows,
-                "batch_columns": used_schema["headers"],
-                "error_details": error_details,
-                "debug_list": debug_list,
-                "all_zip_bytes": all_zip_bytes,
-                "err_zip_bytes": err_zip_bytes,
-            }
+                                    dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
+                                    if not dl_res.get("success") or not dl_res.get("content_b64"):
+                                        err_reason = dl_res.get("message", "Drive se PDF download nahi ho payi")
+                                        error_details.append({"File Name": fname, "Reason": err_reason})
+                                        error_track_items.append({"id": fid, "name": fname})
+                                        debug_list.append({
+                                            "file_name": fname,
+                                            "client_name": fname,
+                                            "detected_company": "",
+                                            "company_scores": {},
+                                            "raw_text": "",
+                                            "error_reason": err_reason,
+                                        })
+                                        progress.progress((idx + 1) / len(target_files))
+                                        continue
 
-            st.session_state.batch_history.insert(0, batch_record)
-            st.session_state.batch_history = st.session_state.batch_history[:MAX_PDF_ROUNDS]
-            st.session_state["last_results"] = batch_record
+                                    pdf_bytes = base64.b64decode(dl_res["content_b64"])
+                                    row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df)
+                                    debug_list.append(debug_info)
+                                    extracted_rows.append(row_dict)
 
-            st.session_state.pdf_uploader_key += 1
-            st.rerun()
+                                    if is_ok:
+                                        done_files.append((fname, pdf_bytes))
+                                        done_track_items.append({"id": fid, "name": fname})
+                                    else:
+                                        error_files.append((fname, pdf_bytes))
+                                        error_details.append({"File Name": fname, "Reason": err_msg})
+                                        error_track_items.append({"id": fid, "name": fname})
+
+                                    progress.progress((idx + 1) / len(target_files))
+
+                                status_text.empty()
+                                progress.empty()
+
+                                sort_msg = ""
+                                with st.spinner("Drive status update & Error PDFs ki copy bana rahe hain..."):
+                                    fin_res = call_backend({
+                                        "action": "finalize_drive_batch",
+                                        "user_id": st.session_state.user_id,
+                                        "target_folder_id": info.get("active_folder_id", ""),
+                                        "folder_url": active_folder_url,
+                                        "done_items": done_track_items,
+                                        "error_items": error_track_items,
+                                        "copy_errors_to_folder": copy_errors_drive,
+                                    })
+                                if fin_res.get("success"):
+                                    copied_err = fin_res.get("copied_error", 0)
+                                    already_err = fin_res.get("already_in_error", 0)
+                                    if copy_errors_drive and error_track_items:
+                                        extra = f" ({already_err} pehle se Error me thi)" if already_err else ""
+                                        sort_msg = (
+                                            f"📂 Drive Safe-Sort: **{copied_err}** Error PDFs ki copy `Error/` folder me save hui{extra} "
+                                            f"— **Saari original Done + Error PDFs apni jagah safe hain!**"
+                                        )
+                                    else:
+                                        sort_msg = "📂 Drive Safe-Sort: Sabhi original PDFs apni jagah safe hain (Done PDFs ko move nahi kiya gaya)!"
+                                    if fin_res.get("copy_errors"):
+                                        sort_msg += f" (Note: {len(fin_res['copy_errors'])} copy warnings — folder Editor permission check karein.)"
+                                else:
+                                    sort_msg = f"⚠️ Drive status notice: {fin_res.get('message', '')}"
+
+                                save_and_record_batch(
+                                    extracted_rows=extracted_rows,
+                                    done_files=done_files,
+                                    error_files=error_files,
+                                    error_details=error_details,
+                                    debug_list=debug_list,
+                                    mode_tag="Mode 3 (Drive)",
+                                    is_direct_sheet=True,
+                                    mode2_target_type="google_sheet",
+                                    skip_duplicates=skip_duplicates_m3,
+                                    move_msg=sort_msg,
+                                )
+
+                                st.session_state.drive_scan_info = None
+                                st.session_state.drive_last_scan_key = ""
+                                st.rerun()
+
+    # ==========================================================
+    # MODE 1 & MODE 2 WORKSPACE: MANUAL PDF UPLOAD
+    # ==========================================================
+    else:
+        hdr1, hdr2 = st.columns([4, 1])
+        with hdr1:
+            st.subheader("📤 Policy PDFs Upload Karein")
+        with hdr2:
+            if st.button("🗑️ Clear All PDFs", use_container_width=True):
+                st.session_state.pdf_uploader_key += 1
+                st.rerun()
+
+        uploaded_pdfs = st.file_uploader(
+            "Ek ya ek se zyada Health Policy PDF select karein",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key=f"pdf_uploader_{st.session_state.pdf_uploader_key}",
+            label_visibility="collapsed",
+        )
+
+        skip_duplicates = st.checkbox(
+            "Duplicate Policy auto-skip karein (Agar same Policy Number + Expiry Date pehle se sheet me saved ho)",
+            value=True
+        )
+
+        btn_label = (
+            "🚀 Start Policy Entry (Mode 2: Direct Fixed Sheet me Save Karein)"
+            if is_mode2
+            else "🚀 Start Policy Entry (Mode 1: Cloud Portal)"
+        )
+
+        if st.button(btn_label, type="primary", use_container_width=True):
+            if not uploaded_pdfs:
+                st.warning("Pehle kam se kam ek Policy PDF upload karein.")
+            elif is_mode2 and mode2_target_type == "google_sheet" and not st.session_state.fixed_sheet_url:
+                st.warning("Mode 2 ke liye pehle Left Sidebar se apni Policy Entry Google Sheet link karein.")
+            elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
+                st.warning("Mode 2 ke liye pehle Left Sidebar se apni Fixed Local Excel (.xlsx) file ka path link karein.")
+            else:
+                master_df = get_active_master_df(manual_master_file)
+                extracted_rows = []
+                done_files = []
+                error_files = []
+                error_details = []
+                debug_list = []
+
+                progress = st.progress(0)
+                status_text = st.empty()
+
+                for idx, pdf in enumerate(uploaded_pdfs):
+                    status_text.text(f"Processing ({idx + 1}/{len(uploaded_pdfs)}): {pdf.name}")
+                    pdf_bytes = pdf.read()
+                    row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df)
+                    debug_list.append(debug_info)
+                    extracted_rows.append(row_dict)
+
+                    if is_ok:
+                        done_files.append((pdf.name, pdf_bytes))
+                    else:
+                        error_files.append((pdf.name, pdf_bytes))
+                        error_details.append({"File Name": pdf.name, "Reason": err_msg})
+
+                    progress.progress((idx + 1) / len(uploaded_pdfs))
+
+                status_text.empty()
+                progress.empty()
+
+                save_and_record_batch(
+                    extracted_rows=extracted_rows,
+                    done_files=done_files,
+                    error_files=error_files,
+                    error_details=error_details,
+                    debug_list=debug_list,
+                    mode_tag="Mode 2" if is_mode2 else "Mode 1",
+                    is_direct_sheet=is_mode2,
+                    mode2_target_type=mode2_target_type,
+                    skip_duplicates=skip_duplicates,
+                )
+
+                st.session_state.pdf_uploader_key += 1
+                st.rerun()
 
     # --- LAST BATCH SUMMARY (CURRENT ROUND) ---
     if "last_results" in st.session_state:
@@ -882,18 +1306,19 @@ else:
 
         z1, z2 = st.columns(2)
         with z1:
-            st.download_button(
-                f"📦 Download Round #{res['round_no']} Sorted PDFs (Done + Error ZIP)",
-                data=res["all_zip_bytes"],
-                file_name=f"Round_{res['round_no']}_Sorted_Policies_{res['timestamp']}.zip",
-                mime="application/zip",
-                use_container_width=True,
-                key=f"latest_all_{res['round_no']}_{res['timestamp']}"
-            )
+            if res.get("round_excel_bytes"):
+                st.download_button(
+                    f"📊 Round #{res['round_no']} Excel Copy",
+                    data=res["round_excel_bytes"],
+                    file_name=f"Round_{res['round_no']}_Health_Entries_{res['timestamp']}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"latest_xlsx_{res['round_no']}_{res['timestamp']}"
+                )
         with z2:
             if res["err_zip_bytes"]:
                 st.download_button(
-                    f"⚠️ Download Round #{res['round_no']} Only Error PDFs (ZIP)",
+                    f"⚠️ Round #{res['round_no']} Only Error PDFs (ZIP)",
                     data=res["err_zip_bytes"],
                     file_name=f"Round_{res['round_no']}_Error_Policies_{res['timestamp']}.zip",
                     mime="application/zip",
@@ -902,10 +1327,10 @@ else:
                 )
 
         if res["error_details"]:
-            st.warning("Neeche di gayi PDFs me problem aayi — ye `Error` folder me alag kar di gayi hain:")
+            st.warning("Neeche di gayi PDFs me problem aayi — inki copy `Error` folder me save kar di gayi hai (original files safe hain):")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
-        if is_mode2 and res.get("batch_rows"):
+        if is_direct_sheet and res.get("batch_rows"):
             preview_cols = res.get("batch_columns") or active_headers
             st.subheader("📋 Is Round me Add Hui Entries (Preview)")
             st.dataframe(pd.DataFrame(res["batch_rows"], columns=preview_cols), use_container_width=True, hide_index=True)
@@ -913,26 +1338,27 @@ else:
     # --- LAST 5 ROUNDS PDF DOWNLOAD HISTORY ---
     if st.session_state.batch_history:
         with st.expander(
-            f"🗂️ Last {len(st.session_state.batch_history)} Rounds PDF Download History (Max {MAX_PDF_ROUNDS} Rounds)",
+            f"🗂️ Last {len(st.session_state.batch_history)} Rounds Download History (Max {MAX_PDF_ROUNDS} Rounds)",
             expanded=(len(st.session_state.batch_history) > 1)
         ):
-            st.caption("Purane rounds ki Done / Error PDFs yahan se kabhi bhi download kar sakte hain.")
+            st.caption("Purane rounds ki Error PDFs ya Excel copy yahan se kabhi bhi download kar sakte hain.")
             for b in st.session_state.batch_history:
-                c_info, c_all, c_err = st.columns([2.5, 1.5, 1.5])
+                c_info, c_xlsx, c_err = st.columns([2.5, 1.5, 1.5])
                 with c_info:
                     st.markdown(
                         f"**Round #{b['round_no']} ({b.get('mode_used', 'Mode 1')})** — `{b['time_display']}`  \n"
                         f"Total: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**"
                     )
-                with c_all:
-                    st.download_button(
-                        f"📦 Round #{b['round_no']} All (ZIP)",
-                        data=b["all_zip_bytes"],
-                        file_name=f"Round_{b['round_no']}_Sorted_Policies_{b['timestamp']}.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        key=f"hist_all_{b['round_no']}_{b['timestamp']}"
-                    )
+                with c_xlsx:
+                    if b.get("round_excel_bytes"):
+                        st.download_button(
+                            f"📊 Round #{b['round_no']} Excel",
+                            data=b["round_excel_bytes"],
+                            file_name=f"Round_{b['round_no']}_Health_Entries_{b['timestamp']}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key=f"hist_xlsx_{b['round_no']}_{b['timestamp']}"
+                        )
                 with c_err:
                     if b["err_zip_bytes"]:
                         st.download_button(
@@ -948,7 +1374,7 @@ else:
                 st.divider()
 
     # --- MODE 1 PERMANENT MASTER SHEET SECTION ---
-    if not is_mode2:
+    if is_mode1:
         st.divider()
         saved_rows = st.session_state.saved_health_rows or []
 
