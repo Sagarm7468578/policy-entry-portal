@@ -42,13 +42,6 @@ COMPANY_KEYWORDS = {
 
 
 def parse_custom_columns(spec_str: str):
-    """
-    Parses user's custom column spec into list of (source_field, display_header).
-    Supports:
-    - One column per line OR pipe '|' separated OR comma separated
-    - Optional rename syntax: 'System Field => Custom Header'
-    - Unknown column names stay as blank manual columns (source_field = '')
-    """
     raw = str(spec_str or "").strip()
     if not raw:
         return [(c, c) for c in OUTPUT_COLUMNS]
@@ -83,7 +76,6 @@ def parse_custom_columns(spec_str: str):
 
 
 def normalize_custom_columns_spec(spec_str: str) -> str:
-    """Converts textarea/user input into clean pipe-separated string for storage in Google Sheet."""
     raw = str(spec_str or "").strip()
     if not raw:
         return ""
@@ -111,7 +103,6 @@ def normalize_custom_columns_spec(spec_str: str) -> str:
 
 
 def spec_to_multiline(spec_str: str) -> str:
-    """Converts stored spec string into clean 1-column-per-line text for editing."""
     raw = str(spec_str or "").strip()
     if not raw:
         return "\n".join(OUTPUT_COLUMNS)
@@ -124,7 +115,6 @@ def spec_to_multiline(spec_str: str) -> str:
 
 
 def get_custom_schema_info(spec_str: str) -> dict:
-    """Returns headers list, mapping tuples, field type hints, and policy/expiry header names."""
     mapping = parse_custom_columns(spec_str)
     headers = [dst for _, dst in mapping]
     col_types = {}
@@ -159,7 +149,6 @@ def get_custom_schema_info(spec_str: str) -> dict:
 
 
 def project_rows_to_schema(rows: list, spec_str: str):
-    """Projects extracted/saved rows into user's exact custom columns in exact order."""
     schema = get_custom_schema_info(spec_str)
     mapping = schema["mapping"]
     projected = []
@@ -201,7 +190,6 @@ def default_extracted_data() -> dict:
 
 
 def extract_pdf_text(pdf_bytes: bytes, max_pages: int = 15) -> str:
-    """Primary: PyMuPDF (HDFC ERGO jaise strict font PDFs bhi bina crash padhta hai). Backup: pypdf."""
     try:
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
         parts = []
@@ -222,7 +210,6 @@ def extract_pdf_text(pdf_bytes: bytes, max_pages: int = 15) -> str:
 
 
 def get_company_scores(pdf_text: str) -> dict:
-    """Renamer Bot Logic: Har company ka naam kitni baar aaya uska score nikalta hai."""
     text_lower = pdf_text.lower()
     scores = {}
     for company, keywords in COMPANY_KEYWORDS.items():
@@ -302,7 +289,6 @@ def extract_generic_agency(pdf_text: str) -> str:
 
 
 def extract_premium_mode(pdf_text: str) -> str:
-    """Payment Details / Instrument Details / Mode of Payment se payment mode nikalta hai."""
     for m_pay in re.finditer(
         r"(?i)(?:Mode\s*of\s*Payment|(?<!Premium\s)Payment\s*Mode|Payment\s*Details|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Payment\s*Method)([\s\S]{0,250})",
         pdf_text,
@@ -513,6 +499,166 @@ def build_sample_master_bytes() -> bytes:
     return buf.getvalue()
 
 
+def _pick_worksheet(wb, sheet_name: str = ""):
+    req = str(sheet_name or "").strip()
+    if not req:
+        return wb.active
+    if req in wb.sheetnames:
+        return wb[req]
+    for nm in wb.sheetnames:
+        if nm.strip().lower() == req.lower():
+            return wb[nm]
+    return wb.create_sheet(title=req)
+
+
+def _append_rows_to_workbook(
+    wb,
+    rows: list,
+    sheet_name: str = "",
+    skip_duplicates: bool = True,
+    custom_columns=None,
+    col_types=None,
+    policy_col: str = "Policy Number",
+    expiry_col: str = "Expiry Date",
+):
+    target_cols = custom_columns if custom_columns else OUTPUT_COLUMNS
+    types_map = col_types or {}
+    ws = _pick_worksheet(wb, sheet_name)
+
+    existing_headers = [
+        str(ws.cell(row=1, column=c).value or "").strip()
+        for c in range(1, max(ws.max_column, 1) + 1)
+    ]
+    if not any(existing_headers):
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        for col_idx, col_name in enumerate(target_cols, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            col_letter = cell.column_letter
+            ws.column_dimensions[col_letter].width = max(
+                len(col_name) + 4,
+                22 if types_map.get(col_name) == "policy_id" else 16
+            )
+        col_map = {name.lower(): idx for idx, name in enumerate(target_cols, start=1)}
+        active_headers = list(target_cols)
+    else:
+        col_map = {}
+        for idx, h in enumerate(existing_headers, start=1):
+            if h and h.lower() not in col_map:
+                col_map[h.lower()] = idx
+        active_headers = [h for h in existing_headers if h]
+
+    last_row = 1
+    max_col = max(col_map.values()) if col_map else 1
+    for r in range(ws.max_row, 1, -1):
+        if any(ws.cell(row=r, column=c).value not in (None, "") for c in range(1, max_col + 1)):
+            last_row = r
+            break
+
+    existing_keys = set()
+    pno_col = col_map.get(policy_col.lower()) or col_map.get("policy number")
+    exp_col = col_map.get(expiry_col.lower()) or col_map.get("expiry date")
+    if skip_duplicates and pno_col and last_row > 1:
+        for r in range(2, last_row + 1):
+            p_val = str(ws.cell(row=r, column=pno_col).value or "").strip().lstrip(",")
+            e_val = str(ws.cell(row=r, column=exp_col).value or "").strip() if exp_col else ""
+            if p_val:
+                existing_keys.add((p_val, e_val))
+
+    added = 0
+    skipped = 0
+    write_row = last_row + 1
+
+    for row_dict in rows:
+        lower_row = {str(k).strip().lower(): v for k, v in row_dict.items()}
+        pno_norm = str(lower_row.get(policy_col.lower(), lower_row.get("policy number", "")) or "").strip().lstrip(",")
+        exp_norm = str(lower_row.get(expiry_col.lower(), lower_row.get("expiry date", "")) or "").strip()
+        key = (pno_norm, exp_norm)
+
+        if skip_duplicates and pno_norm and key in existing_keys:
+            skipped += 1
+            continue
+
+        for h_name in active_headers:
+            h_low = h_name.lower()
+            if h_low in lower_row:
+                c_idx = col_map[h_low]
+                parsed_val, num_fmt = to_excel_value(h_name, lower_row[h_low], types_map.get(h_name, ""))
+                cell = ws.cell(row=write_row, column=c_idx, value=parsed_val)
+                if num_fmt == "@":
+                    cell.data_type = "s"
+                    cell.number_format = "@"
+                elif num_fmt:
+                    cell.number_format = num_fmt
+
+        if pno_norm:
+            existing_keys.add(key)
+        write_row += 1
+        added += 1
+
+    total_entries = max(write_row - 2, 0)
+    return added, skipped, total_entries, ws.title
+
+
+def read_excel_headers_from_bytes(excel_bytes: bytes, sheet_name: str = ""):
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), read_only=True, data_only=True)
+        req = str(sheet_name or "").strip()
+        ws = None
+        if not req:
+            ws = wb.active
+        else:
+            for nm in wb.sheetnames:
+                if nm.strip().lower() == req.lower():
+                    ws = wb[nm]
+                    break
+        if ws is None:
+            tabs = list(wb.sheetnames)
+            wb.close()
+            return [], tabs, f"Excel me '{req}' naam ka tab nahi mila. Available tabs: {', '.join(tabs)}"
+        first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        headers = [str(v).strip() for v in first_row if v is not None and str(v).strip() != ""]
+        tabs = list(wb.sheetnames)
+        wb.close()
+        return headers, tabs, ""
+    except Exception as e:
+        return [], [], f"Excel headers read error: {e}"
+
+
+def append_rows_to_excel_bytes(
+    excel_bytes: bytes,
+    rows: list,
+    sheet_name: str = "",
+    skip_duplicates: bool = True,
+    custom_columns=None,
+    col_types=None,
+    policy_col: str = "Policy Number",
+    expiry_col: str = "Expiry Date",
+    keep_vba: bool = False,
+):
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), keep_vba=keep_vba)
+        added, skipped, total_entries, used_tab = _append_rows_to_workbook(
+            wb=wb,
+            rows=rows,
+            sheet_name=sheet_name,
+            skip_duplicates=skip_duplicates,
+            custom_columns=custom_columns,
+            col_types=col_types,
+            policy_col=policy_col,
+            expiry_col=expiry_col,
+        )
+        out_buf = io.BytesIO()
+        wb.save(out_buf)
+        out_buf.seek(0)
+        return True, "", out_buf.getvalue(), added, skipped, total_entries, used_tab
+    except Exception as e:
+        return False, f"Excel update error: {e}", b"", 0, 0, 0, ""
+
+
 def append_rows_to_local_excel(
     file_path: str,
     rows: list,
@@ -523,113 +669,36 @@ def append_rows_to_local_excel(
     policy_col: str = "Policy Number",
     expiry_col: str = "Expiry Date",
 ):
-    """
-    Fixed location wali local Excel (.xlsx) me purani entries ke neeche nayi entries directly save karta hai.
-    Existing sheet ke headers ko respect karta hai (zabardasti extra columns nahi jorta).
-    """
     clean_path = str(file_path or "").strip().strip('"').strip("'")
     if not clean_path:
         return False, "Excel file ka path khali hai.", 0, 0, 0
-    if not clean_path.lower().endswith(".xlsx"):
-        return False, "Sirf .xlsx Excel file supported hai (path ke end me .xlsx hona chahiye).", 0, 0, 0
+    if not clean_path.lower().endswith((".xlsx", ".xlsm")):
+        return False, "Sirf .xlsx ya .xlsm Excel file supported hai.", 0, 0, 0
 
     parent_dir = os.path.dirname(clean_path)
     if parent_dir and not os.path.exists(parent_dir):
         return False, f"Folder nahi mila: {parent_dir}", 0, 0, 0
 
-    target_cols = custom_columns if custom_columns else OUTPUT_COLUMNS
-    types_map = col_types or {}
-
     try:
+        keep_vba = clean_path.lower().endswith(".xlsm")
         if os.path.exists(clean_path):
-            wb = openpyxl.load_workbook(clean_path)
-            if sheet_name and sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-            elif sheet_name:
-                ws = wb.create_sheet(title=sheet_name)
-            else:
-                ws = wb.active
+            wb = openpyxl.load_workbook(clean_path, keep_vba=keep_vba)
         else:
             wb = Workbook()
-            ws = wb.active
-            ws.title = sheet_name or "Policy Entries"
+            if sheet_name:
+                wb.active.title = sheet_name
 
-        existing_headers = [
-            str(ws.cell(row=1, column=c).value or "").strip()
-            for c in range(1, max(ws.max_column, 1) + 1)
-        ]
-        if not any(existing_headers):
-            header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-            header_font = Font(color="FFFFFF", bold=True)
-            for col_idx, col_name in enumerate(target_cols, start=1):
-                cell = ws.cell(row=1, column=col_idx, value=col_name)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                col_letter = cell.column_letter
-                ws.column_dimensions[col_letter].width = max(
-                    len(col_name) + 4,
-                    22 if types_map.get(col_name) == "policy_id" else 16
-                )
-            col_map = {name.lower(): idx for idx, name in enumerate(target_cols, start=1)}
-            active_headers = list(target_cols)
-        else:
-            col_map = {}
-            for idx, h in enumerate(existing_headers, start=1):
-                if h and h.lower() not in col_map:
-                    col_map[h.lower()] = idx
-            active_headers = [h for h in existing_headers if h]
-
-        last_row = 1
-        max_col = max(col_map.values()) if col_map else 1
-        for r in range(ws.max_row, 1, -1):
-            if any(ws.cell(row=r, column=c).value not in (None, "") for c in range(1, max_col + 1)):
-                last_row = r
-                break
-
-        existing_keys = set()
-        pno_col = col_map.get(policy_col.lower()) or col_map.get("policy number")
-        exp_col = col_map.get(expiry_col.lower()) or col_map.get("expiry date")
-        if skip_duplicates and pno_col and last_row > 1:
-            for r in range(2, last_row + 1):
-                p_val = str(ws.cell(row=r, column=pno_col).value or "").strip().lstrip(",")
-                e_val = str(ws.cell(row=r, column=exp_col).value or "").strip() if exp_col else ""
-                if p_val:
-                    existing_keys.add((p_val, e_val))
-
-        added = 0
-        skipped = 0
-        write_row = last_row + 1
-
-        for row_dict in rows:
-            lower_row = {str(k).strip().lower(): v for k, v in row_dict.items()}
-            pno_norm = str(lower_row.get(policy_col.lower(), lower_row.get("policy number", "")) or "").strip().lstrip(",")
-            exp_norm = str(lower_row.get(expiry_col.lower(), lower_row.get("expiry date", "")) or "").strip()
-            key = (pno_norm, exp_norm)
-
-            if skip_duplicates and pno_norm and key in existing_keys:
-                skipped += 1
-                continue
-
-            for h_name in active_headers:
-                h_low = h_name.lower()
-                if h_low in lower_row:
-                    c_idx = col_map[h_low]
-                    parsed_val, num_fmt = to_excel_value(h_name, lower_row[h_low], types_map.get(h_name, ""))
-                    cell = ws.cell(row=write_row, column=c_idx, value=parsed_val)
-                    if num_fmt == "@":
-                        cell.data_type = "s"
-                        cell.number_format = "@"
-                    elif num_fmt:
-                        cell.number_format = num_fmt
-
-            if pno_norm:
-                existing_keys.add(key)
-            write_row += 1
-            added += 1
-
+        added, skipped, total_entries, _ = _append_rows_to_workbook(
+            wb=wb,
+            rows=rows,
+            sheet_name=sheet_name,
+            skip_duplicates=skip_duplicates,
+            custom_columns=custom_columns,
+            col_types=col_types,
+            policy_col=policy_col,
+            expiry_col=expiry_col,
+        )
         wb.save(clean_path)
-        total_entries = max(write_row - 2, 0)
         return True, f"{added} nayi entries direct '{os.path.basename(clean_path)}' me save ho gayi!", added, skipped, total_entries
 
     except PermissionError:
