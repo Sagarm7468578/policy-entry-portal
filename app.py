@@ -108,11 +108,33 @@ def save_local_excel_path(path_str, sheet_name):
         pass
 
 
+def is_google_auth_configured():
+    try:
+        return hasattr(st, "login") and "auth" in st.secrets
+    except Exception:
+        return False
+
+
+def get_google_user_info():
+    try:
+        if hasattr(st, "user") and getattr(st.user, "is_logged_in", False):
+            email = str(st.user.get("email", "") or "").strip().lower()
+            name = str(st.user.get("name", "") or "").strip()
+            return True, email, name
+    except Exception:
+        pass
+    return False, "", ""
+
+
 # --- SESSION STATE INITIALIZATION ---
 defaults = {
     "logged_in": False,
+    "auth_method": "",
     "user_id": "",
+    "user_email": "",
+    "user_name": "",
     "expiry": "",
+    "google_auth_error": "",
     "pdf_uploader_key": 0,
     "saved_health_rows": None,
     "batch_history": [],
@@ -134,41 +156,87 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 
+# --- AUTO-RESTORE GOOGLE LOGIN (PERSISTENT ACROSS REFRESH & BROWSER RESTART) ---
+google_configured = is_google_auth_configured()
+google_logged_in, g_email, g_name = get_google_user_info()
+
+if google_logged_in and g_email and not st.session_state.logged_in:
+    with st.spinner("Google account verify ho raha hai..."):
+        g_res = call_backend({
+            "action": "google_login",
+            "email": g_email,
+        })
+    if g_res.get("success"):
+        st.session_state.logged_in = True
+        st.session_state.auth_method = "google"
+        st.session_state.user_id = g_res.get("user_id", g_email)
+        st.session_state.user_email = g_email
+        st.session_state.user_name = g_name
+        st.session_state.expiry = g_res.get("expiry", "")
+        st.session_state.google_auth_error = ""
+        st.session_state.saved_health_rows = None
+        st.session_state.settings_loaded = False
+        st.session_state.linked_master_df = None
+        st.session_state.linked_master_error = ""
+        st.session_state.batch_history = []
+        st.session_state.round_counter = 0
+        st.rerun()
+    else:
+        st.session_state.google_auth_error = g_res.get("message", "Yeh Gmail account registered/active nahi hai.")
+
+
 # --- LOGIN SCREEN ---
 if not st.session_state.logged_in:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.title("🔐 Policy Entry Software Login")
-        st.write("Apna User ID aur Password dalkar login karein.")
 
-        with st.form("login_form"):
-            user_id = st.text_input("User ID")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login", use_container_width=True)
+        if google_logged_in and st.session_state.google_auth_error:
+            st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
+            st.info("Agar aapne apna plan activate karwa liya hai, to Admin se is Gmail ko `Users` sheet me add karwayein ya dusre Gmail se login karein.")
+            if st.button("🔄 Dusre Google Account se Login Karein", type="primary", use_container_width=True):
+                st.session_state.google_auth_error = ""
+                st.logout()
+        elif google_configured:
+            st.write("Ek baar Google se login karein — jab tak aap Logout nahi karenge, portal hamesha logged in rahega.")
+            if st.button("🔵 Continue with Google", type="primary", use_container_width=True):
+                st.login()
+        else:
+            st.warning("⚠️ Google Login abhi Streamlit Secrets (`[auth]`) me configure nahi hua hai. Neeche Password se login kar sakte hain.")
 
-            if submit:
-                if not user_id or not password:
-                    st.warning("User ID aur Password dono bharein.")
-                else:
-                    with st.spinner("Check kar rahe hain..."):
-                        result = call_backend({
-                            "action": "login",
-                            "user_id": user_id,
-                            "password": password
-                        })
-                    if result.get("success"):
-                        st.session_state.logged_in = True
-                        st.session_state.user_id = user_id.strip()
-                        st.session_state.expiry = result.get("expiry", "")
-                        st.session_state.saved_health_rows = None
-                        st.session_state.settings_loaded = False
-                        st.session_state.linked_master_df = None
-                        st.session_state.linked_master_error = ""
-                        st.session_state.batch_history = []
-                        st.session_state.round_counter = 0
-                        st.rerun()
+        st.divider()
+        with st.expander("🔑 User ID & Password se Login (Backup Option)", expanded=not google_configured):
+            with st.form("login_form"):
+                user_id = st.text_input("User ID")
+                password = st.text_input("Password", type="password")
+                submit = st.form_submit_button("Login", use_container_width=True)
+
+                if submit:
+                    if not user_id or not password:
+                        st.warning("User ID aur Password dono bharein.")
                     else:
-                        st.error(result.get("message", "Login fail ho gaya."))
+                        with st.spinner("Check kar rahe hain..."):
+                            result = call_backend({
+                                "action": "login",
+                                "user_id": user_id,
+                                "password": password
+                            })
+                        if result.get("success"):
+                            st.session_state.logged_in = True
+                            st.session_state.auth_method = "password"
+                            st.session_state.user_id = user_id.strip()
+                            st.session_state.user_email = ""
+                            st.session_state.user_name = ""
+                            st.session_state.expiry = result.get("expiry", "")
+                            st.session_state.saved_health_rows = None
+                            st.session_state.settings_loaded = False
+                            st.session_state.linked_master_df = None
+                            st.session_state.linked_master_error = ""
+                            st.session_state.batch_history = []
+                            st.session_state.round_counter = 0
+                            st.rerun()
+                        else:
+                            st.error(result.get("message", "Login fail ho gaya."))
 
 
 # --- MAIN POLICY ENTRY DASHBOARD ---
@@ -201,7 +269,9 @@ else:
 
     # --- SIDEBAR (SETTINGS + POLICY SHEET LINK + CLIENT MASTER LINK) ---
     with st.sidebar:
-        st.success(f"👤 **{st.session_state.user_id}**  \n📅 Valid Till: **{st.session_state.expiry}**")
+        display_user = st.session_state.user_name or st.session_state.user_id
+        email_line = f"  \n📧 `{st.session_state.user_email}`" if st.session_state.user_email else ""
+        st.success(f"👤 **{display_user}**{email_line}  \n📅 Valid Till: **{st.session_state.expiry}**")
 
         default_mode_idx = 1 if (st.session_state.fixed_sheet_url or st.session_state.local_excel_path) else 0
         working_mode = st.radio(
@@ -445,11 +515,15 @@ else:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
-        if st.button("Logout", use_container_width=True):
+        if st.button("🚪 Logout", use_container_width=True):
+            was_google = st.session_state.auth_method == "google"
             for k, v in defaults.items():
                 st.session_state[k] = v
             st.session_state.pop("last_results", None)
-            st.rerun()
+            if was_google and google_configured:
+                st.logout()
+            else:
+                st.rerun()
 
     # --- CLEAN MAIN WORKSPACE (MINIMUM SCROLLING) ---
     st.title("📄 Automatic Policy Entry Portal")
