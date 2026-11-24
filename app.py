@@ -8,6 +8,11 @@ import requests
 import streamlit as st
 from health_parser import (
     OUTPUT_COLUMNS,
+    ALL_SYSTEM_FIELDS,
+    normalize_custom_columns_spec,
+    spec_to_multiline,
+    get_custom_schema_info,
+    project_rows_to_schema,
     process_health_pdf,
     build_excel_bytes,
     build_sample_master_bytes,
@@ -49,12 +54,14 @@ def load_user_sheet_settings(user_id):
             "fixed_sheet_tab": res.get("fixed_sheet_tab", "Policy Entries") or "Policy Entries",
             "client_master_url": res.get("client_master_url", ""),
             "client_master_tab": res.get("client_master_tab", ""),
+            "health_custom_columns": res.get("health_custom_columns", ""),
         }
     return {
         "fixed_sheet_url": "",
         "fixed_sheet_tab": "Policy Entries",
         "client_master_url": "",
         "client_master_tab": "",
+        "health_custom_columns": "",
     }
 
 
@@ -136,6 +143,7 @@ defaults = {
     "expiry": "",
     "google_auth_error": "",
     "pdf_uploader_key": 0,
+    "col_editor_key": 0,
     "saved_health_rows": None,
     "batch_history": [],
     "round_counter": 0,
@@ -146,6 +154,7 @@ defaults = {
     "client_master_url": "",
     "client_master_tab": "",
     "client_master_sheet_name": "",
+    "health_custom_columns": "",
     "linked_master_df": None,
     "linked_master_error": "",
     "local_excel_path": "",
@@ -241,15 +250,16 @@ if not st.session_state.logged_in:
 
 # --- MAIN POLICY ENTRY DASHBOARD ---
 else:
-    # Load permanent linked sheets once after login
+    # Load permanent linked sheets & custom columns once after login
     if not st.session_state.settings_loaded:
-        with st.spinner("Aapki linked sheets load ho rahi hain..."):
+        with st.spinner("Aapki linked sheets aur custom columns load ho rahe hain..."):
             cfg = load_user_sheet_settings(st.session_state.user_id)
             l_path, l_tab = load_local_excel_path()
             st.session_state.fixed_sheet_url = cfg["fixed_sheet_url"]
             st.session_state.fixed_sheet_tab = cfg["fixed_sheet_tab"]
             st.session_state.client_master_url = cfg["client_master_url"]
             st.session_state.client_master_tab = cfg["client_master_tab"]
+            st.session_state.health_custom_columns = cfg["health_custom_columns"]
             st.session_state.local_excel_path = l_path
             st.session_state.local_sheet_name = l_tab
 
@@ -264,10 +274,14 @@ else:
 
             st.session_state.settings_loaded = True
 
+    active_schema = get_custom_schema_info(st.session_state.health_custom_columns)
+    active_headers = active_schema["headers"]
+    is_custom_cols = bool(st.session_state.health_custom_columns.strip())
+
     mode2_target_type = "google_sheet"
     manual_master_file = None
 
-    # --- SIDEBAR (SETTINGS + POLICY SHEET LINK + CLIENT MASTER LINK) ---
+    # --- SIDEBAR (SETTINGS + POLICY SHEET + CLIENT MASTER + CUSTOM COLUMNS) ---
     with st.sidebar:
         display_user = st.session_state.user_name or st.session_state.user_id
         email_line = f"  \n📧 `{st.session_state.user_email}`" if st.session_state.user_email else ""
@@ -507,6 +521,78 @@ else:
                         key="client_master_uploader",
                     )
 
+        # 3. CUSTOM SHEET COLUMNS PANEL (USER + ADMIN HYBRID CONTROL)
+        col_badge = f"Custom: {len(active_headers)}" if is_custom_cols else f"Default: {len(OUTPUT_COLUMNS)}"
+        with st.expander(f"🛠️ Sheet Columns ({col_badge})", expanded=False):
+            st.caption(
+                "Har line me 1 column likhein (exact order me).  \n"
+                "• Auto-fill fields: Client Name, Policy Number, Occupation, etc.  \n"
+                "• Manual/Blank column: Bas naam likh dein (e.g. `Accounts`, `Mail`, `Print`)  \n"
+                "• Header rename: `Client Name => Insured Name`"
+            )
+
+            if is_mode2 and mode2_target_type == "google_sheet" and st.session_state.fixed_sheet_url:
+                if st.button("📥 Linked Sheet se Headers Import Karein", use_container_width=True, key="import_sheet_hdrs"):
+                    with st.spinner("Sheet ke Row 1 headers padh rahe hain..."):
+                        h_res = call_backend({
+                            "action": "get_sheet_headers",
+                            "sheet_url": st.session_state.fixed_sheet_url,
+                            "sheet_tab": st.session_state.fixed_sheet_tab,
+                        })
+                    if h_res.get("success") and h_res.get("headers"):
+                        imported_spec = normalize_custom_columns_spec("\n".join(h_res["headers"]))
+                        s_res = save_user_sheet_settings(
+                            st.session_state.user_id,
+                            health_custom_columns=imported_spec,
+                        )
+                        if s_res.get("success"):
+                            st.session_state.health_custom_columns = imported_spec
+                            st.session_state.col_editor_key += 1
+                            st.rerun()
+                        else:
+                            st.error(s_res.get("message", "Save nahi ho paya."))
+                    else:
+                        st.warning(h_res.get("message", "Sheet ki Row 1 khali hai — neeche manually columns paste karke Save karein."))
+
+            cols_text = st.text_area(
+                "Apne Columns (1 per line)",
+                value=spec_to_multiline(st.session_state.health_custom_columns),
+                height=240,
+                key=f"custom_cols_textarea_{st.session_state.col_editor_key}",
+            )
+
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                if st.button("💾 Save", type="primary", use_container_width=True, key="save_custom_cols"):
+                    norm_spec = normalize_custom_columns_spec(cols_text)
+                    with st.spinner("Columns save ho rahe hain..."):
+                        s_res = save_user_sheet_settings(
+                            st.session_state.user_id,
+                            health_custom_columns=norm_spec,
+                        )
+                    if s_res.get("success"):
+                        st.session_state.health_custom_columns = norm_spec
+                        st.session_state.col_editor_key += 1
+                        st.rerun()
+                    else:
+                        st.error(s_res.get("message", "Save nahi ho paya."))
+            with cc2:
+                if st.button("🔄 Reset", use_container_width=True, key="reset_custom_cols"):
+                    with st.spinner("Default columns reset ho rahe hain..."):
+                        s_res = save_user_sheet_settings(
+                            st.session_state.user_id,
+                            health_custom_columns="",
+                        )
+                    if s_res.get("success"):
+                        st.session_state.health_custom_columns = ""
+                        st.session_state.col_editor_key += 1
+                        st.rerun()
+                    else:
+                        st.error(s_res.get("message", "Reset nahi ho paya."))
+
+            with st.popover("📋 Available Auto-Fill Fields", use_container_width=True):
+                st.write(", ".join(ALL_SYSTEM_FIELDS))
+
         st.divider()
         st.download_button(
             "📋 Sample Client Master",
@@ -549,7 +635,11 @@ else:
     else:
         cm_status = "⚪ Not Linked"
 
-    st.caption(f"**Mode:** {'Mode 2 (Auto-Save)' if is_mode2 else 'Mode 1 (Download)'}  |  **Policy Sheet:** {ps_status}  |  **Client Master:** {cm_status}")
+    cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
+    st.caption(
+        f"**Mode:** {'Mode 2 (Auto-Save)' if is_mode2 else 'Mode 1 (Download)'}  |  "
+        f"**Policy Sheet:** {ps_status}  |  **Client Master:** {cm_status}  |  **Format:** {cols_status}"
+    )
 
     # Load Mode 1 saved rows once if needed
     if not is_mode2 and st.session_state.saved_health_rows is None:
@@ -636,6 +726,12 @@ else:
             status_text.empty()
             progress.empty()
 
+            # Project rows to user's custom columns (or default 26)
+            projected_rows, used_schema = project_rows_to_schema(
+                extracted_rows,
+                st.session_state.health_custom_columns,
+            )
+
             save_msg = ""
             save_error = ""
             skipped_count = 0
@@ -646,9 +742,13 @@ else:
                     with st.spinner("Fixed Local Excel (.xlsx) me purani entry ke neeche save ho raha hai..."):
                         ok, msg, added, skipped, total_cnt = append_rows_to_local_excel(
                             st.session_state.local_excel_path,
-                            extracted_rows,
+                            projected_rows,
                             sheet_name=st.session_state.local_sheet_name,
                             skip_duplicates=skip_duplicates,
+                            custom_columns=used_schema["headers"],
+                            col_types=used_schema["col_types"],
+                            policy_col=used_schema["policy_col"],
+                            expiry_col=used_schema["expiry_col"],
                         )
                     skipped_count = skipped
                     if ok:
@@ -663,7 +763,11 @@ else:
                             "sheet_url": st.session_state.fixed_sheet_url,
                             "sheet_tab": st.session_state.fixed_sheet_tab,
                             "skip_duplicates": skip_duplicates,
-                            "rows": extracted_rows,
+                            "custom_columns": used_schema["headers"],
+                            "col_types": used_schema["col_types"],
+                            "policy_col": used_schema["policy_col"],
+                            "expiry_col": used_schema["expiry_col"],
+                            "rows": projected_rows,
                         })
                     if g_res.get("success"):
                         skipped_count = g_res.get("skipped", 0)
@@ -744,7 +848,8 @@ else:
                 "skipped_count": skipped_count,
                 "save_msg": save_msg,
                 "save_error": save_error,
-                "batch_rows": extracted_rows,
+                "batch_rows": projected_rows,
+                "batch_columns": used_schema["headers"],
                 "error_details": error_details,
                 "debug_list": debug_list,
                 "all_zip_bytes": all_zip_bytes,
@@ -801,8 +906,9 @@ else:
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
         if is_mode2 and res.get("batch_rows"):
+            preview_cols = res.get("batch_columns") or active_headers
             st.subheader("📋 Is Round me Add Hui Entries (Preview)")
-            st.dataframe(pd.DataFrame(res["batch_rows"], columns=OUTPUT_COLUMNS), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(res["batch_rows"], columns=preview_cols), use_container_width=True, hide_index=True)
 
     # --- LAST 5 ROUNDS PDF DOWNLOAD HISTORY ---
     if st.session_state.batch_history:
@@ -860,16 +966,24 @@ else:
                         st.rerun()
 
         if saved_rows:
-            master_excel_bytes = build_excel_bytes(saved_rows)
+            proj_saved, saved_schema = project_rows_to_schema(
+                saved_rows,
+                st.session_state.health_custom_columns,
+            )
+            master_excel_bytes = build_excel_bytes(
+                proj_saved,
+                columns=saved_schema["headers"],
+                col_types=saved_schema["col_types"],
+            )
             st.download_button(
-                f"📥 Download {DEFAULT_HEALTH_EXCEL_NAME} ({len(saved_rows)} Entries)",
+                f"📥 Download {DEFAULT_HEALTH_EXCEL_NAME} ({len(proj_saved)} Entries)",
                 data=master_excel_bytes,
                 file_name=DEFAULT_HEALTH_EXCEL_NAME,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
                 use_container_width=True
             )
-            st.dataframe(pd.DataFrame(saved_rows, columns=OUTPUT_COLUMNS), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(proj_saved, columns=saved_schema["headers"]), use_container_width=True, hide_index=True)
 
             with st.expander("🗑️ Nayi Sheet Shuru Karein (Purani Saved Entries Clear Karein)"):
                 st.warning("Dhyan dein: Clear karne se pehle upar se apni Excel download karke save kar lein.")
