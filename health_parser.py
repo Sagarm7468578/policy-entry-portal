@@ -1,133 +1,244 @@
-from datetime import datetime, timedelta
-from health_parsers import COMPANY_PARSERS
-from health_parsers.common import (
-    IST,
-    OUTPUT_COLUMNS,
-    ALL_SYSTEM_FIELDS,
-    MONTH_NAMES_BY_NUM,
-    lookup_accounts_master,
-    build_sample_accounts_master_bytes,
-    parse_renewal_list_pdf,
-    get_renewal_lookup_months,
-    match_renewal_record,
-    parse_custom_columns,
-    normalize_custom_columns_spec,
-    spec_to_multiline,
-    get_custom_schema_info,
-    project_rows_to_schema,
-    extract_pdf_text,
-    get_company_scores,
-    fmt_date,
-    extract_generic_agency,
-    extract_premium_mode,
-    extract_oldest_dob,
-    lookup_client_master,
-    build_excel_bytes,
-    build_sample_master_bytes,
-    read_excel_headers_from_bytes,
-    append_rows_to_excel_bytes,
-    append_rows_to_local_excel,
-)
+import io
+import re
+from datetime import date, datetime, timedelta, timezone
+import pymupdf
+from pypdf import PdfReader
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+OUTPUT_COLUMNS = [
+    "Client Name", "Client Code", "Mobile", "Mail Id", "Policy Number",
+    "Insurance Type", "Sub Type", "Company Name", "Agency", "Sub agent",
+    "Plan Name", "Premium", "Sum Insured", "Inception Date", "Expiry Date",
+    "Reminder Date", "Premium Mode", "Policy Status", "Remark",
+    "PYP Number", "Share", "Share %", "Family code", "Date of Entry",
+    "DOB", "OUR RENEWAL"
+]
+
+DATE_FIELDS = {"Inception Date", "Expiry Date", "Reminder Date", "Date of Entry", "DOB"}
+DATE_FIELDS_LOWER = {c.lower() for c in DATE_FIELDS}
+
+ALL_SYSTEM_FIELDS = OUTPUT_COLUMNS + ["Occupation", "Accounts", "PYP premium"]
+SYSTEM_FIELD_LOOKUP = {f.lower(): f for f in ALL_SYSTEM_FIELDS}
+
+MONTH_NAMES_BY_NUM = {
+    1: ("JANUARY", "JAN"),
+    2: ("FEBRUARY", "FEB"),
+    3: ("MARCH", "MAR"),
+    4: ("APRIL", "APR"),
+    5: ("MAY", "MAY"),
+    6: ("JUNE", "JUN"),
+    7: ("JULY", "JUL"),
+    8: ("AUGUST", "AUG"),
+    9: ("SEPTEMBER", "SEP"),
+    10: ("OCTOBER", "OCT"),
+    11: ("NOVEMBER", "NOV"),
+    12: ("DECEMBER", "DEC"),
+}
+
+COMPANY_KEYWORDS = {
+    "MANIPAL CIGNA": ["manipalcigna", "manipal cigna"],
+    "CARE HEALTH": ["care health", "religare health"],
+    "NIVA BUPA": ["niva bupa", "max bupa"],
+    "ORIENTAL": ["the oriental insurance", "oriental insurance"],
+    "UNITED INDIA": ["united india insurance", "united india"],
+    "ICICI LOMBARD": ["icici lombard"],
+    "NEW INDIA": ["the new india assurance", "new india assurance", "new india"],
+    "IFFCO TOKIO": ["iffco-tokio", "iffco tokio"],
+    "BAJAJ ALLIANZ": ["bajaj allianz"],
+    "TATA AIG": ["tata aig"],
+    "HDFC ERGO": ["hdfc ergo"],
+    "NATIONAL": ["national insurance company", "national insurance"],
+    "ADITYA BIRLA": ["aditya birla health", "aditya birla"],
+    "STAR HEALTH": ["star health and allied", "star health"],
+}
 
 
-def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, accounts_df=None):
-    """Returns (row_dict, is_success, error_reason, debug_info)"""
-    today_ist = datetime.now(IST).replace(tzinfo=None)
-    entry_date = fmt_date(today_ist)
-
-    base_row = {col: "" for col in ALL_SYSTEM_FIELDS}
-    base_row["Insurance Type"] = "HEALTH INSURANCE"
-    base_row["Date of Entry"] = entry_date
-
-    debug_info = {
-        "file_name": file_name,
+def default_extracted_data() -> dict:
+    return {
         "client_name": "",
-        "detected_company": "",
-        "company_scores": {},
-        "raw_text": "",
-        "error_reason": "",
+        "policy_number": "",
+        "sub_type": "MEDICLAIM",
+        "plan_name": "N/A",
+        "premium": "",
+        "sum_insured": "",
+        "start_dt": None,
+        "end_dt": None,
+        "pyp_number": "",
+        "agency": "",
+        "premium_mode": "",
+        "dob": "",
     }
 
+
+def extract_pdf_text(pdf_bytes: bytes, max_pages: int = 15) -> str:
     try:
-        pdf_text = extract_pdf_text(pdf_bytes)
-        debug_info["raw_text"] = pdf_text
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        parts = []
+        for page in doc[:max_pages]:
+            parts.append(page.get_text("text") or "")
+        doc.close()
+        text = "\n".join(parts)
+        if text.strip():
+            return text
+    except Exception:
+        pass
 
-        if len(pdf_text.strip()) < 80:
-            base_row["Client Name"] = file_name
-            debug_info["client_name"] = file_name
-            debug_info["error_reason"] = "Scanned / Image PDF (text readable nahi hai)"
-            return base_row, False, debug_info["error_reason"], debug_info
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    parts = []
+    for page in reader.pages[:max_pages]:
+        parts.append(page.extract_text() or "")
+    return "\n".join(parts)
 
-        scores = get_company_scores(pdf_text)
-        company = next(iter(scores.keys()), "")
-        debug_info["company_scores"] = scores
-        debug_info["detected_company"] = company
 
-        parser_fn = COMPANY_PARSERS.get(company)
-        if not company or not parser_fn:
-            base_row["Client Name"] = file_name
-            base_row["Company Name"] = company or "UNKNOWN"
-            debug_info["client_name"] = file_name
-            debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
-            return base_row, False, debug_info["error_reason"], debug_info
+def get_company_scores(pdf_text: str) -> dict:
+    text_lower = pdf_text.lower()
+    scores = {}
+    for company, keywords in COMPANY_KEYWORDS.items():
+        count = sum(len(re.findall(re.escape(kw), text_lower)) for kw in keywords)
+        if count > 0:
+            scores[company] = count
+    return dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))
 
-        extracted = parser_fn(pdf_text)
-        if not extracted.get("client_name") and not extracted.get("policy_number"):
-            base_row["Client Name"] = file_name
-            base_row["Company Name"] = company
-            debug_info["client_name"] = file_name
-            debug_info["error_reason"] = "Client Name aur Policy Number extract nahi ho paya"
-            return base_row, False, debug_info["error_reason"], debug_info
 
-        debug_info["client_name"] = extracted["client_name"] or file_name
-        master_info = lookup_client_master(extracted["client_name"], master_df)
+def parse_any_date(date_str):
+    if not date_str:
+        return None
+    if isinstance(date_str, datetime):
+        return date_str
+    if isinstance(date_str, date):
+        return datetime(date_str.year, date_str.month, date_str.day)
+    clean = re.sub(r"\s+", " ", str(date_str).strip()).replace("/", "-").replace(",", "")
+    formats = [
+        "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%d-%b-%Y", "%d-%b-%y",
+        "%b %d %Y", "%B %d %Y", "%d %b %Y", "%d %B %Y"
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(clean, fmt)
+        except ValueError:
+            continue
+    return None
 
-        end_dt = extracted.get("end_dt")
-        reminder_date = fmt_date(end_dt - timedelta(days=15)) if end_dt else ""
-        policy_status = ""
-        if end_dt:
-            policy_status = "INACTIVE" if end_dt.date() < today_ist.date() else "ACTIVE"
 
-        agency = extracted.get("agency") or extract_generic_agency(pdf_text)
-        premium_mode = extracted.get("premium_mode") or extract_premium_mode(pdf_text)
-        dob = extracted.get("dob") or extract_oldest_dob(pdf_text, extracted.get("start_dt"))
-        accounts_val = lookup_accounts_master(company, agency, accounts_df)
+def fmt_date(dt) -> str:
+    return dt.strftime("%d-%m-%Y") if dt else ""
 
-        base_row.update({
-            "Client Name": extracted["client_name"],
-            "Client Code": master_info["client_code"],
-            "Occupation": master_info["occupation"],
-            "Mobile": master_info["mobile"],
-            "Mail Id": master_info["mail_id"],
-            "Policy Number": str(extracted["policy_number"]),
-            "Insurance Type": "HEALTH INSURANCE",
-            "Sub Type": extracted["sub_type"],
-            "Company Name": company,
-            "Agency": agency,
-            "Sub agent": master_info["sub_agent"],
-            "Accounts": accounts_val,
-            "Plan Name": extracted["plan_name"],
-            "Premium": extracted["premium"],
-            "Sum Insured": extracted["sum_insured"],
-            "Inception Date": fmt_date(extracted.get("start_dt")),
-            "Expiry Date": fmt_date(end_dt),
-            "Reminder Date": reminder_date,
-            "Premium Mode": premium_mode,
-            "Policy Status": policy_status,
-            "Remark": "",
-            "PYP Number": str(extracted["pyp_number"]),
-            "PYP premium": "",
-            "Share": "",
-            "Share %": "",
-            "Family code": master_info["family_code"],
-            "Date of Entry": entry_date,
-            "DOB": dob,
-            "OUR RENEWAL": "",
-        })
-        return base_row, True, "", debug_info
 
-    except Exception as e:
-        base_row["Client Name"] = file_name
-        debug_info["client_name"] = file_name
-        debug_info["error_reason"] = str(e)
-        return base_row, False, str(e), debug_info
+def _norm_date_key(val) -> str:
+    if val is None or val == "":
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%d-%m-%Y")
+    if isinstance(val, date):
+        return val.strftime("%d-%m-%Y")
+    s = str(val).strip()
+    dt = parse_any_date(s)
+    return dt.strftime("%d-%m-%Y") if dt else s
+
+
+def clean_amount(val: str) -> str:
+    if not val:
+        return ""
+    val = re.sub(r"\.\d+$", "", val.strip())
+    return re.sub(r"[,\s]", "", val)
+
+
+def clean_person_name(name: str) -> str:
+    if not name:
+        return ""
+    name = re.sub(r"[\r\n]+", " ", name)
+    name = re.sub(r"\s+\d{4,}.*$", "", name)
+    name = re.sub(r"(?i)^\s*((?:MRS|MISS|MR|MS|DR|SMT|SHRI|MASTER|MAST|M/S)(?:\.|\b)\s*)+", "", name)
+    name = re.sub(r"\s+", " ", name).strip(" .,:-_")
+    return name.upper()
+
+
+def extract_generic_agency(pdf_text: str) -> str:
+    patterns = [
+        r"(?i)Name\s+of\s+(?:the\s+)?[\r\n\s]*(?:Agent|Intermediary|Broker|Advisor|POSP)(?:[/\s]*(?:Agent|Intermediary|Broker|Advisor|POSP|CPSC|User|IMD|Direct))*[\s:\-\r\n]+([^\r\n]{3,70})",
+        r"(?i)Intermediary\s*Details\s*[\r\n]+\s*Name\s*[\r\n]+\s*Code\s*[\r\n]+\s*Contact\s*(?:Details|Number|No\.?)\s*[\r\n]+\s*([^\r\n]{3,60})",
+        r"(?i)Intermediary\s*Details\s*[\r\n]+\s*Name\s*[\r\n]+\s*Code\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
+        r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*Intermediary\s*Contact\s*(?:Number|No\.?)\s*[\r\n]+\s*([^\r\n]{3,60})",
+        r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
+        r"(?i)Agent/Intermediary Contact No\.[\s\r\n]+([A-Za-z\s]+?)\s+[A-Z0-9]{5,20}\s+\d{8,15}",
+        r"(?i)(?:Intermediary|Agent|Broker|IMD|Advisor|POSP|Channel\s*Partner|Partner)(?:\s*/\s*(?:Intermediary|Agent|Broker|Advisor|POSP))?\s*Name\s*[:\-]?\s*([^\r\n]{3,65})",
+        r"(?i)(?:Intermediary|Agent|Broker|Advisor)\s*Name\s*[:\-]?\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
+    ]
+    bad_starts = (
+        "intermediary", "agent", "broker", "advisor", "code", "contact",
+        "mobile", "email", "phone", "license", "details", "number", "no", "id", "address", "user", "cpsc"
+    )
+    for pat in patterns:
+        for m in re.finditer(pat, pdf_text):
+            raw = re.sub(r"\([^)]*\)", "", m.group(1))
+            val = re.split(
+                r"(?i)\b(?:Intermediary|Agent|Broker|Code|Contact|Mobile|Email|Phone|License|ID|No\.|Number|Address|Branch|Location)\b",
+                raw,
+            )[0]
+            val = re.sub(r"(?i)^\s*((?:MRS|MISS|MR|MS|DR|SMT|SHRI)(?:\.|\b)\s*)+", "", val)
+            val = re.sub(r"[^A-Za-z0-9\s.&/-]", "", val)
+            val = re.sub(r"\s+", " ", val).strip(" .:-_/")
+            if len(val) >= 3 and not val.isdigit():
+                first_word = val.split()[0].lower()
+                if first_word not in bad_starts:
+                    return val.upper()
+    return ""
+
+
+def extract_premium_mode(pdf_text: str) -> str:
+    for m_pay in re.finditer(
+        r"(?i)(?:Mode\s*of\s*Payment|(?<!Premium\s)Payment\s*Mode|Payment\s*Details|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Payment\s*Method)([\s\S]{0,250})",
+        pdf_text,
+    ):
+        block = m_pay.group(0)
+        block = re.split(
+            r"(?i)(?:Eligibility\s*of\s*Premium|Section\s*80D|Income\s*Tax\s*Act|Terms\s*&\s*Conditions)",
+            block,
+        )[0]
+        clean_block = re.sub(
+            r"(?i)(?:Pin\s*Code|Pincode|HSN\s*Code|Mumbai|Indore|Delhi|Chennai|Hyderabad)\s*[:\-]?\s*\d{6}",
+            "",
+            block,
+        )
+
+        if re.search(
+            r"(?i)\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU)\b",
+            clean_block,
+        ):
+            return "ONLINE"
+
+        if re.search(r"(?i)\b(?:Cheque|Chq\.?|DD|Demand\s*Draft)\b", clean_block):
+            return "CHEQUE"
+
+        if re.search(r"(?i)Instrument\s*(?:Details|No\.?|Number)", clean_block):
+            m_inst = re.search(
+                r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,200}?(?<![A-Za-z0-9/\-])(\d{6})(?![A-Za-z0-9/\-])",
+                clean_block,
+            )
+            if m_inst:
+                return "CHEQUE"
+
+        if re.search(r"(?i)\b(?:ECS|NACH|Auto\s*Debit|Standing\s*Instruction)\b", clean_block):
+            return "AUTO DEBIT"
+
+        cash_check_block = re.sub(r"(?i)(?:other\s+than\s+cash|paid\s+in\s+cash|cashless)", "", clean_block)
+        if re.search(r"(?i)\bCash\b", cash_check_block):
+            return "CASH"
+
+    return ""
+
+
+def extract_oldest_dob(pdf_text: str, start_dt=None) -> str:
+    cleaned = re.sub(r"(\b\d{2}[/\-][A-Za-z0-9]{2,3}[/\-](?:19|20))[\r\n\s]+(\d{2})\b", r"\1\2", pdf_text)
+    matches = re.findall(r"\b\d{2}[/\-][A-Za-z0-9]{2,3}[/\-](?:19|20)\d{2}\b", cleaned)
+    today = datetime.now(IST).replace(tzinfo=None)
+    cutoff = start_dt - timedelta(days=30) if start_dt else today - timedelta(days=365)
+
+    oldest = None
+    for d_str in matches:
+        dt = parse_any_date(d_str)
+        if dt and datetime(1920, 1, 1) <= dt < cutoff:
+            if oldest is None or dt < oldest:
+                oldest = dt
+    return fmt_date(oldest)
