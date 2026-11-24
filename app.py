@@ -33,6 +33,15 @@ MAX_PDF_ROUNDS = 5
 IS_CLOUD = os.path.exists("/mount/src")
 LOCAL_CONFIG_FILE = "mode2_local_config.json"
 
+ADMIN_EMAILS = {"mahajansagar746@gmail.com"}
+ADMIN_USER_IDS = {"mahajansagar746@gmail.com", "test01"}
+
+
+def is_admin_user():
+    email = str(st.session_state.get("user_email", "") or "").strip().lower()
+    uid = str(st.session_state.get("user_id", "") or "").strip().lower()
+    return (email in ADMIN_EMAILS) or (uid in ADMIN_USER_IDS)
+
 
 def call_backend(payload, timeout=120):
     payload["secret"] = SECRET_KEY
@@ -239,7 +248,10 @@ def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schem
             s_name = g_res.get("sheet_name", "Google Sheet")
             t_name = g_res.get("tab_name", target_tab or "Policy Entries")
             tot_cnt = g_res.get("total_rows", "")
-            msg = f"✅ {mode_tag} Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt})"
+            if mode_tag.startswith("Mode 3"):
+                msg = "ENTRY DONE PLS RECHECK NOW"
+            else:
+                msg = f"✅ {mode_tag} Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {tot_cnt})"
             return True, msg, "", skipped_cnt, s_name
         return False, "", f"❌ Google Sheet save fail: {g_res.get('message', 'Unknown error')}", 0, ""
 
@@ -264,7 +276,7 @@ def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schem
         return False, "", f"❌ {err_msg}", skipped_cnt, file_name
 
     if added_cnt == 0:
-        msg = f"✅ {mode_tag}: Koi nayi entry add nahi hui ({skipped_cnt} duplicates pehle se '{file_name}' me saved the)."
+        msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag}: Koi nayi entry add nahi hui ({skipped_cnt} duplicates pehle se '{file_name}' me saved the)."
         return True, msg, "", skipped_cnt, file_name
 
     up_res = call_backend({
@@ -275,11 +287,14 @@ def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schem
     }, timeout=120)
 
     if up_res.get("success"):
-        msg = (
-            f"✅ {mode_tag} Direct Excel Save: **{added_cnt}** nayi entries seedha Google Drive Excel "
-            f"`{file_name}` (Tab: `{used_tab}`) me purani entries ke neeche save ho gayi! "
-            f"(Total Entries: **{total_cnt}** — Google Drive PC par apne aap sync ho jayega!)"
-        )
+        if mode_tag.startswith("Mode 3"):
+            msg = "ENTRY DONE PLS RECHECK NOW"
+        else:
+            msg = (
+                f"✅ {mode_tag} Direct Excel Save: **{added_cnt}** nayi entries seedha Google Drive Excel "
+                f"`{file_name}` (Tab: `{used_tab}`) me purani entries ke neeche save ho gayi! "
+                f"(Total Entries: **{total_cnt}** — Google Drive PC par apne aap sync ho jayega!)"
+            )
         return True, msg, "", skipped_cnt, file_name
     return False, "", f"❌ Google Drive Excel update fail: {up_res.get('message', 'Unknown error')}", skipped_cnt, file_name
 
@@ -456,10 +471,11 @@ def save_and_record_batch(
                 st.session_state.saved_health_rows.extend(new_rows_to_save)
                 save_msg = f"⚠️ Cloud save me dikkat aayi ({save_res.get('message', '')}), par entries is session ki sheet me add ho gayi hain."
 
-    if move_msg and save_msg:
-        save_msg = f"{save_msg}  \n{move_msg}"
-    elif move_msg and not save_error:
-        save_msg = move_msg
+    if not mode_tag.startswith("Mode 3"):
+        if move_msg and save_msg:
+            save_msg = f"{save_msg}  \n{move_msg}"
+        elif move_msg and not save_error:
+            save_msg = move_msg
 
     all_zip_buf = io.BytesIO()
     with zipfile.ZipFile(all_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -514,6 +530,11 @@ def save_and_record_batch(
     st.session_state["last_results"] = batch_record
 
 
+def _on_select_all_pdfs_change():
+    st.session_state.drive_pdf_sel_default = bool(st.session_state.get("m3_select_all_cb", True))
+    st.session_state.drive_pdf_sel_ver += 1
+
+
 # --- SESSION STATE INITIALIZATION ---
 defaults = {
     "logged_in": False,
@@ -565,6 +586,9 @@ defaults = {
     "drive_last_scan_key": "",
     "drive_selected_year": "",
     "drive_selected_month": "",
+    "drive_pdf_sel_ver": 0,
+    "drive_pdf_sel_default": True,
+    "drive_pdf_list_sig": "",
     "linked_master_df": None,
     "linked_master_error": "",
     "local_excel_path": "",
@@ -1488,7 +1512,7 @@ else:
                 if not all_drive_files:
                     st.info("✅ Is folder me abhi koi PDF file nahi hai. Nayi Health PDFs folder me dalein aur **🔄 Scan Folder** dabayein.")
                 else:
-                    include_done = False
+                    include_done = True
                     if already_done_files:
                         st.success(
                             f"📄 Total Folder PDFs: **{len(all_drive_files)}**  |  "
@@ -1497,35 +1521,64 @@ else:
                         )
                         include_done = st.checkbox(
                             f"Already-entered ({len(already_done_files)}) PDFs ko bhi dobara process karein",
-                            value=False,
+                            value=True,
                             key="include_done_m3",
                         )
                     else:
                         st.success(f"📄 **{len(new_or_retry_files)} Pending PDFs** ready hain (Original PDFs apni jagah safe rahengi!)")
 
-                    target_files = all_drive_files if include_done else new_or_retry_files
+                    candidate_files = all_drive_files if include_done else new_or_retry_files
 
-                    with st.expander(f"📋 Folder ki PDFs Dekhein ({len(target_files)} selected / {len(all_drive_files)} total)", expanded=False):
-                        df_pending = pd.DataFrame([
-                            {
-                                "#": i + 1,
-                                "File Name": f["name"],
-                                "Status": "✅ Entered" if f.get("last_status") == "DONE" else ("⚠️ Prev Error" if f.get("last_status") == "ERROR" else "🆕 New"),
-                                "Size (KB)": f.get("size_kb", ""),
-                                "Modified": f.get("updated", ""),
-                            }
-                            for i, f in enumerate(all_drive_files)
-                        ])
-                        st.dataframe(df_pending, use_container_width=True, hide_index=True)
-
-                    if not target_files:
+                    if not candidate_files:
                         st.info("🎉 Is folder ki saari PDFs pehle hi enter ho chuki hain! Nayi PDF aane par bas **🔄 Scan Folder** dabayein.")
                     else:
+                        list_sig = f"{info.get('active_folder_id', '')}|{include_done}|{','.join(f['id'] for f in candidate_files)}"
+                        if st.session_state.drive_pdf_list_sig != list_sig:
+                            st.session_state.drive_pdf_list_sig = list_sig
+                            st.session_state.drive_pdf_sel_default = True
+                            st.session_state.m3_select_all_cb = True
+                            st.session_state.drive_pdf_sel_ver += 1
+
+                        with st.expander(f"📋 Folder ki PDFs Select Karein ({len(candidate_files)} available)", expanded=True):
+                            st.checkbox(
+                                "☑️ Select All PDFs (Tick = Sab Select | Untick = Sab Unselect)",
+                                key="m3_select_all_cb",
+                                on_change=_on_select_all_pdfs_change,
+                            )
+
+                            df_selectable = pd.DataFrame([
+                                {
+                                    "Select": st.session_state.drive_pdf_sel_default,
+                                    "#": i + 1,
+                                    "File Name": f["name"],
+                                    "Status": "✅ Entered" if f.get("last_status") == "DONE" else ("⚠️ Prev Error" if f.get("last_status") == "ERROR" else "🆕 New"),
+                                    "Size (KB)": f.get("size_kb", ""),
+                                    "Modified": f.get("updated", ""),
+                                }
+                                for i, f in enumerate(candidate_files)
+                            ])
+
+                            edited_df = st.data_editor(
+                                df_selectable,
+                                use_container_width=True,
+                                hide_index=True,
+                                disabled=["#", "File Name", "Status", "Size (KB)", "Modified"],
+                                column_config={
+                                    "Select": st.column_config.CheckboxColumn("Select", default=True, width="small"),
+                                    "#": st.column_config.NumberColumn("#", width="small"),
+                                },
+                                key=f"m3_pdf_editor_{st.session_state.drive_pdf_sel_ver}",
+                            )
+
+                            selected_indices = edited_df.index[edited_df["Select"] == True].tolist()
+                            target_files = [candidate_files[i] for i in selected_indices]
+                            st.caption(f"✅ Selected for Entry: **{len(target_files)} / {len(candidate_files)} PDFs**")
+
                         opt1, opt2 = st.columns(2)
                         with opt1:
                             skip_duplicates_m3 = st.checkbox(
                                 "Duplicate Policy auto-skip karein",
-                                value=True,
+                                value=False,
                                 key="skip_dup_m3",
                             )
                         with opt2:
@@ -1536,13 +1589,16 @@ else:
                             )
 
                         if st.button(
-                            f"🚀 Process {len(target_files)} PDFs & Direct Save in Drive Excel (.xlsx)",
+                            f"🚀 Process {len(target_files)} Selected PDFs & Direct Save in Drive Excel (.xlsx)",
                             type="primary",
                             use_container_width=True,
+                            disabled=(len(target_files) == 0),
                             key="start_mode3_btn",
                         ):
                             if not active_m3_excel_url:
                                 st.warning("Mode 3 ke liye pehle Left Sidebar → **📊 Mode 3 Drive Excel** me apni Google Drive `.xlsx` file link karein.")
+                            elif not target_files:
+                                st.warning("Kam se kam ek PDF par tick lagayein.")
                             else:
                                 master_df = get_active_master_df(manual_master_file)
                                 accounts_df = get_active_accounts_df("health", manual_acc_files)
@@ -1601,9 +1657,8 @@ else:
                                 status_text.empty()
                                 progress.empty()
 
-                                sort_msg = ""
                                 with st.spinner("Drive status update & Error PDFs ki copy bana rahe hain..."):
-                                    fin_res = call_backend({
+                                    call_backend({
                                         "action": "finalize_drive_batch",
                                         "user_id": st.session_state.user_id,
                                         "target_folder_id": info.get("active_folder_id", ""),
@@ -1612,21 +1667,6 @@ else:
                                         "error_items": error_track_items,
                                         "copy_errors_to_folder": copy_errors_drive,
                                     })
-                                if fin_res.get("success"):
-                                    copied_err = fin_res.get("copied_error", 0)
-                                    already_err = fin_res.get("already_in_error", 0)
-                                    if copy_errors_drive and error_track_items:
-                                        extra = f" ({already_err} pehle se Error me thi)" if already_err else ""
-                                        sort_msg = (
-                                            f"📂 Drive Safe-Sort: **{copied_err}** Error PDFs ki copy `Error/` folder me save hui{extra} "
-                                            f"— **Saari original Done + Error PDFs apni jagah safe hain!**"
-                                        )
-                                    else:
-                                        sort_msg = "📂 Drive Safe-Sort: Sabhi original PDFs apni jagah safe hain (Done PDFs ko move nahi kiya gaya)!"
-                                    if fin_res.get("copy_errors"):
-                                        sort_msg += f" (Note: {len(fin_res['copy_errors'])} copy warnings — folder Editor permission check karein.)"
-                                else:
-                                    sort_msg = f"⚠️ Drive status notice: {fin_res.get('message', '')}"
 
                                 save_and_record_batch(
                                     extracted_rows=extracted_rows,
@@ -1641,7 +1681,7 @@ else:
                                     drive_target_url=active_m3_excel_url,
                                     drive_target_tab=st.session_state.mode3_excel_tab,
                                     is_mode3_excel_slot=True,
-                                    move_msg=sort_msg,
+                                    move_msg="",
                                 )
 
                                 st.session_state.drive_scan_info = None
@@ -1670,7 +1710,7 @@ else:
 
         skip_duplicates = st.checkbox(
             "Duplicate Policy auto-skip karein (Agar same Policy Number + Expiry Date pehle se sheet me saved ho)",
-            value=True
+            value=False
         )
 
         btn_label = (
@@ -1756,27 +1796,28 @@ else:
         m2.metric("Done (YES) ✅", res["done_count"])
         m3.metric("Error (Check Karein) ❌", res["error_count"])
 
-        z1, z2 = st.columns(2)
-        with z1:
-            if res.get("round_excel_bytes"):
-                st.download_button(
-                    f"📊 Round #{res['round_no']} Excel Copy",
-                    data=res["round_excel_bytes"],
-                    file_name=f"Round_{res['round_no']}_Health_Entries_{res['timestamp']}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key=f"latest_xlsx_{res['round_no']}_{res['timestamp']}"
-                )
-        with z2:
-            if res["err_zip_bytes"]:
-                st.download_button(
-                    f"⚠️ Round #{res['round_no']} Only Error PDFs (ZIP)",
-                    data=res["err_zip_bytes"],
-                    file_name=f"Round_{res['round_no']}_Error_Policies_{res['timestamp']}.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    key=f"latest_err_{res['round_no']}_{res['timestamp']}"
-                )
+        if not is_mode3:
+            z1, z2 = st.columns(2)
+            with z1:
+                if res.get("round_excel_bytes"):
+                    st.download_button(
+                        f"📊 Round #{res['round_no']} Excel Copy",
+                        data=res["round_excel_bytes"],
+                        file_name=f"Round_{res['round_no']}_Health_Entries_{res['timestamp']}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key=f"latest_xlsx_{res['round_no']}_{res['timestamp']}"
+                    )
+            with z2:
+                if res["err_zip_bytes"]:
+                    st.download_button(
+                        f"⚠️ Round #{res['round_no']} Only Error PDFs (ZIP)",
+                        data=res["err_zip_bytes"],
+                        file_name=f"Round_{res['round_no']}_Error_Policies_{res['timestamp']}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key=f"latest_err_{res['round_no']}_{res['timestamp']}"
+                    )
 
         if res["error_details"]:
             st.warning("Neeche di gayi PDFs me problem aayi — inki copy `Error` folder me save kar di gayi hai (original files safe hain):")
@@ -1784,11 +1825,11 @@ else:
 
         if is_direct_sheet and res.get("batch_rows"):
             preview_cols = res.get("batch_columns") or active_headers
-            st.subheader("📋 Is Round me Add Hui Entries (Preview)")
+            st.subheader("Preview Mode")
             st.dataframe(pd.DataFrame(res["batch_rows"], columns=preview_cols), use_container_width=True, hide_index=True)
 
-    # --- LAST 5 ROUNDS DOWNLOAD HISTORY ---
-    if st.session_state.batch_history:
+    # --- LAST 5 ROUNDS DOWNLOAD HISTORY (ONLY FOR MODE 1 & MODE 2; REMOVED FROM MODE 3) ---
+    if not is_mode3 and st.session_state.batch_history:
         with st.expander(
             f"🗂️ Last {len(st.session_state.batch_history)} Rounds Download History (Max {MAX_PDF_ROUNDS} Rounds)",
             expanded=(len(st.session_state.batch_history) > 1)
@@ -1882,9 +1923,9 @@ else:
         else:
             st.info("Abhi aapki saved Health sheet khali hai. Pehli baar PDF upload karte hi saari entries yahan save hone lagengi.")
 
-    # --- DEBUG MODE ---
-    if st.session_state.batch_history:
-        with st.expander("🐞 Debug Mode — Kisi bhi PDF ka Full Raw Text & Company Score Dekhein"):
+    # --- ADMIN-ONLY DEBUG MODE ---
+    if is_admin_user() and st.session_state.batch_history:
+        with st.expander("click for bugging"):
             round_options = [
                 f"Round #{b['round_no']} ({b['time_display']}) - {b['total_count']} PDFs"
                 for b in st.session_state.batch_history
@@ -1904,7 +1945,7 @@ else:
                     for idx, d in enumerate(debug_list)
                 ]
                 selected_pdf_idx = st.selectbox(
-                    "Debug karne ke liye Policy / Name chunein:",
+                    "pls select pdf for bugging",
                     options=range(len(pdf_labels)),
                     format_func=lambda i: pdf_labels[i],
                     key=f"debug_pdf_selector_{chosen_batch['round_no']}"
@@ -1933,5 +1974,5 @@ else:
                     key=f"debug_textarea_{chosen_batch['round_no']}_{selected_pdf_idx}_{selected_debug['file_name']}"
                 )
 
-                with st.expander("📋 1-Click Copy Box (Upar right corner me Copy icon milega)"):
+                with st.expander("click for copy of pdf text"):
                     st.code(raw_txt, language=None)
