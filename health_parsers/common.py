@@ -20,8 +20,36 @@ OUTPUT_COLUMNS = [
     "DOB", "OUR RENEWAL"
 ]
 
-ALL_SYSTEM_FIELDS = OUTPUT_COLUMNS + ["Occupation"]
+ALL_SYSTEM_FIELDS = OUTPUT_COLUMNS + ["Occupation", "Accounts"]
 SYSTEM_FIELD_LOOKUP = {f.lower(): f for f in ALL_SYSTEM_FIELDS}
+
+_COMPANY_ALIASES = {
+    "ICIC LOMBARD": "ICICI LOMBARD",
+    "ICICI LOMBARD GENERAL INSURANCE": "ICICI LOMBARD",
+    "MANIPAL SIGMA": "MANIPAL CIGNA",
+    "MANIPALCIGNA": "MANIPAL CIGNA",
+    "MAX BUPA": "NIVA BUPA",
+    "RELIGARE HEALTH": "CARE HEALTH",
+    "ORIENTAL INSURANCE": "ORIENTAL",
+    "THE ORIENTAL": "ORIENTAL",
+    "THE ORIENTAL INSURANCE": "ORIENTAL",
+    "UNITED INDIA INSURANCE": "UNITED INDIA",
+    "THE NEW INDIA ASSURANCE": "NEW INDIA",
+    "NEW INDIA ASSURANCE": "NEW INDIA",
+    "NATIONAL INSURANCE": "NATIONAL",
+    "NATIONAL INSURANCE COMPANY": "NATIONAL",
+    "STAR HEALTH AND ALLIED": "STAR HEALTH",
+    "ADITYA BIRLA HEALTH": "ADITYA BIRLA",
+    "IFFCO-TOKIO": "IFFCO TOKIO",
+}
+
+_AGENCY_SHORT_ALIASES = {
+    "SURESH KUMAR CHINCHANI": "SKC",
+    "SONAL LADDHA": "SL",
+    "CHAYAN LADDHA": "CL",
+    "SUMIT MAHESHWARI": "SM",
+    "MOHIT MAHESHWARI": "MM",
+}
 
 COMPANY_KEYWORDS = {
     "MANIPAL CIGNA": ["manipalcigna", "manipal cigna"],
@@ -39,6 +67,98 @@ COMPANY_KEYWORDS = {
     "ADITYA BIRLA": ["aditya birla health", "aditya birla"],
     "STAR HEALTH": ["star health and allied", "star health"],
 }
+
+
+def _norm_upper(val: str) -> str:
+    return re.sub(r"\s+", " ", str(val or "").strip().upper()).strip(" .:-_")
+
+
+def _norm_company(val: str) -> str:
+    u = _norm_upper(val)
+    return _COMPANY_ALIASES.get(u, u)
+
+
+def _norm_agency_alias(val: str) -> str:
+    u = _norm_upper(val)
+    return _AGENCY_SHORT_ALIASES.get(u, u)
+
+
+def lookup_accounts_master(company_name: str, agency_name: str, accounts_df: pd.DataFrame) -> str:
+    """
+    Dynamically looks up 'Accounts' value from user's linked/uploaded Accounts Master sheet
+    using (Company Name + Agency). Works for all users across Health, Motor, and SME.
+    """
+    if accounts_df is None or accounts_df.empty or not company_name or not agency_name:
+        return ""
+
+    cols = {str(c).strip().lower(): c for c in accounts_df.columns}
+    comp_col = cols.get("company name") or cols.get("company") or cols.get("insurer") or cols.get("insurance company")
+    ag_col = cols.get("agency") or cols.get("agency name") or cols.get("intermediary") or cols.get("agent") or cols.get("broker")
+    acc_col = cols.get("accounts") or cols.get("account") or cols.get("account name")
+
+    if not comp_col or not ag_col or not acc_col:
+        return ""
+
+    target_comp_raw = _norm_upper(company_name)
+    target_comp_norm = _norm_company(company_name)
+    target_ag_raw = _norm_upper(agency_name)
+    target_ag_alias = _norm_agency_alias(agency_name)
+
+    exact_map = {}
+    comp_norm_map = {}
+    full_norm_map = {}
+
+    for _, row in accounts_df.iterrows():
+        c_val = row[comp_col]
+        a_val = row[ag_col]
+        acc_val = row[acc_col]
+        if pd.isna(c_val) or pd.isna(a_val) or pd.isna(acc_val):
+            continue
+        acc_str = str(acc_val).strip()
+        if not acc_str or acc_str.lower() == "nan":
+            continue
+
+        c_raw = _norm_upper(c_val)
+        c_norm = _norm_company(c_val)
+        a_raw = _norm_upper(a_val)
+        a_alias = _norm_agency_alias(a_val)
+        if not c_raw or not a_raw:
+            continue
+
+        exact_map.setdefault((c_raw, a_raw), acc_str)
+        comp_norm_map.setdefault((c_norm, a_raw), acc_str)
+        full_norm_map.setdefault((c_norm, a_alias), acc_str)
+
+    if (target_comp_raw, target_ag_raw) in exact_map:
+        return exact_map[(target_comp_raw, target_ag_raw)]
+    if (target_comp_norm, target_ag_raw) in comp_norm_map:
+        return comp_norm_map[(target_comp_norm, target_ag_raw)]
+    if (target_comp_norm, target_ag_alias) in full_norm_map:
+        return full_norm_map[(target_comp_norm, target_ag_alias)]
+    return ""
+
+
+def build_sample_accounts_master_bytes() -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Accounts Master"
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    headers = ["Company Name", "Agency", "Accounts"]
+    for idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=idx, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[cell.column_letter].width = 24
+
+    ws.append(["HDFC ERGO", "SKC", "SM"])
+    ws.append(["STAR HEALTH", "CL", "CL"])
+    ws.append(["CARE HEALTH", "SONAL LADDHA", "SM"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 def parse_custom_columns(spec_str: str):
