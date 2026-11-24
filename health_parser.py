@@ -18,6 +18,8 @@ from health_parsers.common import (
     lookup_client_master,
     build_excel_bytes,
     build_sample_master_bytes,
+    read_excel_headers_from_bytes,
+    append_rows_to_excel_bytes,
     append_rows_to_local_excel,
 )
 
