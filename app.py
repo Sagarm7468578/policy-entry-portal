@@ -1,5 +1,6 @@
 import streamlit as st
 from health_parser import get_custom_schema_info
+from portal.backend import is_admin_user
 from portal.state import (
     init_session_state,
     handle_auto_google_login,
@@ -13,6 +14,28 @@ st.set_page_config(page_title="Policy Entry Portal", page_icon="📄", layout="w
 
 init_session_state()
 google_configured, google_logged_in, g_email = handle_auto_google_login()
+
+# Clients ke liye top-right Share/GitHub/Menu aur bottom Streamlit/Manage chrome hide karein (Admin ko sab dikhega)
+if not is_admin_user():
+    st.markdown(
+        """
+        <style>
+            #MainMenu,
+            footer,
+            [data-testid="stToolbarActions"],
+            [data-testid="stAppDeployButton"],
+            [data-testid="stMainMenu"],
+            [data-testid="manage-app-button"],
+            [class*="viewerBadge"],
+            .stActionButton,
+            .stDeployButton {
+                display: none !important;
+                visibility: hidden !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 if not st.session_state.logged_in:
     render_login_screen(google_configured, google_logged_in, g_email)
