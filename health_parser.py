@@ -4,6 +4,8 @@ from health_parsers.common import (
     IST,
     OUTPUT_COLUMNS,
     ALL_SYSTEM_FIELDS,
+    lookup_accounts_master,
+    build_sample_accounts_master_bytes,
     parse_custom_columns,
     normalize_custom_columns_spec,
     spec_to_multiline,
@@ -24,7 +26,7 @@ from health_parsers.common import (
 )
 
 
-def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
+def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, accounts_df=None):
     """Returns (row_dict, is_success, error_reason, debug_info)"""
     today_ist = datetime.now(IST).replace(tzinfo=None)
     entry_date = fmt_date(today_ist)
@@ -85,6 +87,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
         agency = extracted.get("agency") or extract_generic_agency(pdf_text)
         premium_mode = extracted.get("premium_mode") or extract_premium_mode(pdf_text)
         dob = extracted.get("dob") or extract_oldest_dob(pdf_text, extracted.get("start_dt"))
+        accounts_val = lookup_accounts_master(company, agency, accounts_df)
 
         base_row.update({
             "Client Name": extracted["client_name"],
@@ -98,6 +101,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None):
             "Company Name": company,
             "Agency": agency,
             "Sub agent": master_info["sub_agent"],
+            "Accounts": accounts_val,
             "Plan Name": extracted["plan_name"],
             "Premium": extracted["premium"],
             "Sum Insured": extracted["sum_insured"],
