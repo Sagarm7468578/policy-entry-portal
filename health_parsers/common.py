@@ -20,6 +20,9 @@ OUTPUT_COLUMNS = [
     "DOB", "OUR RENEWAL"
 ]
 
+ALL_SYSTEM_FIELDS = OUTPUT_COLUMNS + ["Occupation"]
+SYSTEM_FIELD_LOOKUP = {f.lower(): f for f in ALL_SYSTEM_FIELDS}
+
 COMPANY_KEYWORDS = {
     "MANIPAL CIGNA": ["manipalcigna", "manipal cigna"],
     "CARE HEALTH": ["care health", "religare health"],
@@ -36,6 +39,148 @@ COMPANY_KEYWORDS = {
     "ADITYA BIRLA": ["aditya birla health", "aditya birla"],
     "STAR HEALTH": ["star health and allied", "star health"],
 }
+
+
+def parse_custom_columns(spec_str: str):
+    """
+    Parses user's custom column spec into list of (source_field, display_header).
+    Supports:
+    - One column per line OR pipe '|' separated OR comma separated
+    - Optional rename syntax: 'System Field => Custom Header'
+    - Unknown column names stay as blank manual columns (source_field = '')
+    """
+    raw = str(spec_str or "").strip()
+    if not raw:
+        return [(c, c) for c in OUTPUT_COLUMNS]
+
+    if "\n" in raw or "\r" in raw or "|" in raw:
+        parts = re.split(r"[\r\n|]+", raw)
+    else:
+        parts = raw.split(",")
+
+    mapping = []
+    seen_headers = set()
+    for part in parts:
+        item = part.strip()
+        if not item:
+            continue
+        if "=>" in item:
+            src_raw, dst_raw = item.split("=>", 1)
+            src_clean = src_raw.strip()
+            dst_clean = dst_raw.strip() or src_clean
+            src_canonical = SYSTEM_FIELD_LOOKUP.get(src_clean.lower(), "")
+        else:
+            dst_clean = item
+            src_canonical = SYSTEM_FIELD_LOOKUP.get(item.lower(), "")
+
+        key_lower = dst_clean.lower()
+        if key_lower in seen_headers:
+            continue
+        seen_headers.add(key_lower)
+        mapping.append((src_canonical, dst_clean))
+
+    return mapping if mapping else [(c, c) for c in OUTPUT_COLUMNS]
+
+
+def normalize_custom_columns_spec(spec_str: str) -> str:
+    """Converts textarea/user input into clean pipe-separated string for storage in Google Sheet."""
+    raw = str(spec_str or "").strip()
+    if not raw:
+        return ""
+    if "\n" in raw or "\r" in raw or "|" in raw:
+        parts = re.split(r"[\r\n|]+", raw)
+    else:
+        parts = raw.split(",")
+
+    cleaned = []
+    seen = set()
+    for p in parts:
+        item = p.strip()
+        if not item:
+            continue
+        if "=>" in item:
+            a, b = item.split("=>", 1)
+            item = f"{a.strip()} => {b.strip()}"
+            hdr_key = (b.strip() or a.strip()).lower()
+        else:
+            hdr_key = item.lower()
+        if hdr_key not in seen:
+            seen.add(hdr_key)
+            cleaned.append(item)
+    return " | ".join(cleaned)
+
+
+def spec_to_multiline(spec_str: str) -> str:
+    """Converts stored spec string into clean 1-column-per-line text for editing."""
+    raw = str(spec_str or "").strip()
+    if not raw:
+        return "\n".join(OUTPUT_COLUMNS)
+    if "\n" in raw or "\r" in raw or "|" in raw:
+        parts = re.split(r"[\r\n|]+", raw)
+    else:
+        parts = raw.split(",")
+    lines = [p.strip() for p in parts if p.strip()]
+    return "\n".join(lines) if lines else "\n".join(OUTPUT_COLUMNS)
+
+
+def get_custom_schema_info(spec_str: str) -> dict:
+    """Returns headers list, mapping tuples, field type hints, and policy/expiry header names."""
+    mapping = parse_custom_columns(spec_str)
+    headers = [dst for _, dst in mapping]
+    col_types = {}
+    policy_col = "Policy Number"
+    expiry_col = "Expiry Date"
+
+    for src, dst in mapping:
+        canonical = src or SYSTEM_FIELD_LOOKUP.get(dst.lower(), "")
+        if canonical in {"Premium", "Sum Insured", "Share", "Share %"}:
+            col_types[dst] = "number"
+        elif canonical == "Mobile":
+            col_types[dst] = "mobile"
+        elif canonical in {"Policy Number", "PYP Number"}:
+            col_types[dst] = "policy_id"
+        elif canonical in {"Client Code", "Family code"}:
+            col_types[dst] = "code_id"
+        else:
+            col_types[dst] = "text"
+
+        if canonical == "Policy Number":
+            policy_col = dst
+        elif canonical == "Expiry Date":
+            expiry_col = dst
+
+    return {
+        "mapping": mapping,
+        "headers": headers,
+        "col_types": col_types,
+        "policy_col": policy_col,
+        "expiry_col": expiry_col,
+    }
+
+
+def project_rows_to_schema(rows: list, spec_str: str):
+    """Projects extracted/saved rows into user's exact custom columns in exact order."""
+    schema = get_custom_schema_info(spec_str)
+    mapping = schema["mapping"]
+    projected = []
+    for r in rows:
+        lower_r = {str(k).strip().lower(): v for k, v in r.items()}
+        out = {}
+        for src, dst in mapping:
+            if src:
+                val = r.get(src, "")
+                if val == "" and src.lower() in lower_r:
+                    val = lower_r[src.lower()]
+                if val == "" and dst.lower() in lower_r:
+                    val = lower_r[dst.lower()]
+                out[dst] = val if val is not None else ""
+            else:
+                val = r.get(dst, "")
+                if val == "" and dst.lower() in lower_r:
+                    val = lower_r[dst.lower()]
+                out[dst] = val if val is not None else ""
+        projected.append(out)
+    return projected, schema
 
 
 def default_extracted_data() -> dict:
@@ -126,17 +271,12 @@ def clean_person_name(name: str) -> str:
 
 def extract_generic_agency(pdf_text: str) -> str:
     patterns = [
-        # New India / PSU multi-line format
         r"(?i)Name\s+of\s+(?:the\s+)?[\r\n\s]*(?:Agent|Intermediary|Broker|Advisor|POSP)(?:[/\s]*(?:Agent|Intermediary|Broker|Advisor|POSP|CPSC|User|IMD|Direct))*[\s:\-\r\n]+([^\r\n]{3,70})",
-        # Care Health stacked format
         r"(?i)Intermediary\s*Details\s*[\r\n]+\s*Name\s*[\r\n]+\s*Code\s*[\r\n]+\s*Contact\s*(?:Details|Number|No\.?)\s*[\r\n]+\s*([^\r\n]{3,60})",
         r"(?i)Intermediary\s*Details\s*[\r\n]+\s*Name\s*[\r\n]+\s*Code\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
-        # HDFC ERGO stacked format
         r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*Intermediary\s*Contact\s*(?:Number|No\.?)\s*[\r\n]+\s*([^\r\n]{3,60})",
         r"(?i)Intermediary\s*Name\s*[\r\n]+\s*Intermediary\s*Code\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
-        # TATA AIG format
         r"(?i)Agent/Intermediary Contact No\.[\s\r\n]+([A-Za-z\s]+?)\s+[A-Z0-9]{5,20}\s+\d{8,15}",
-        # General inline formats
         r"(?i)(?:Intermediary|Agent|Broker|IMD|Advisor|POSP|Channel\s*Partner|Partner)(?:\s*/\s*(?:Intermediary|Agent|Broker|Advisor|POSP))?\s*Name\s*[:\-]?\s*([^\r\n]{3,65})",
         r"(?i)(?:Intermediary|Agent|Broker|Advisor)\s*Name\s*[:\-]?\s*[\r\n]+\s*([A-Za-z][A-Za-z\s.&/-]{2,55})",
     ]
@@ -221,7 +361,14 @@ def extract_oldest_dob(pdf_text: str, start_dt=None) -> str:
 
 
 def lookup_client_master(client_name: str, master_df: pd.DataFrame) -> dict:
-    empty = {"client_code": "", "mobile": "", "mail_id": "", "sub_agent": "", "family_code": ""}
+    empty = {
+        "client_code": "",
+        "occupation": "",
+        "mobile": "",
+        "mail_id": "",
+        "sub_agent": "",
+        "family_code": "",
+    }
     if master_df is None or master_df.empty or not client_name:
         return empty
 
@@ -256,6 +403,7 @@ def lookup_client_master(client_name: str, master_df: pd.DataFrame) -> dict:
 
     return {
         "client_code": get_val(["client code"]),
+        "occupation": get_val(["occupation", "profession"]),
         "mobile": get_val(["mobile", "mobile no", "phone"]),
         "mail_id": get_val(["mail id", "mail", "email", "email id"]),
         "sub_agent": get_val(["sub agent", "subagent"]),
@@ -263,12 +411,26 @@ def lookup_client_master(client_name: str, master_df: pd.DataFrame) -> dict:
     }
 
 
-def to_excel_value(col_name: str, raw_val):
+def to_excel_value(col_name: str, raw_val, col_type: str = ""):
     val = str(raw_val if raw_val is not None else "").strip()
     if not val:
         return "", None
 
-    if col_name in {"Premium", "Sum Insured", "Share", "Share %"}:
+    t = col_type
+    if not t:
+        c_low = col_name.lower()
+        if c_low in {"premium", "sum insured", "share", "share %"}:
+            t = "number"
+        elif c_low == "mobile":
+            t = "mobile"
+        elif c_low in {"policy number", "pyp number"}:
+            t = "policy_id"
+        elif c_low in {"client code", "family code"}:
+            t = "code_id"
+        else:
+            t = "text"
+
+    if t == "number":
         cleaned = val.replace(",", "").replace("%", "").strip()
         if re.fullmatch(r"-?\d+", cleaned):
             return int(cleaned), "0"
@@ -276,20 +438,20 @@ def to_excel_value(col_name: str, raw_val):
             return float(cleaned), "0.##"
         return val, None
 
-    if col_name == "Mobile":
+    if t == "mobile":
         cleaned = re.sub(r"[\s\-]", "", val)
         if re.fullmatch(r"[1-9]\d{6,14}", cleaned):
             return int(cleaned), "0"
         return val, "@"
 
-    if col_name in {"Policy Number", "PYP Number"}:
+    if t == "policy_id":
         if re.fullmatch(r"[1-9]\d{0,14}", val):
             return int(val), "0"
         if re.fullmatch(r"\d{16,}", val):
             return f",{val}", "@"
         return val, "@"
 
-    if col_name in {"Client Code", "Family code"}:
+    if t == "code_id":
         if re.fullmatch(r"[1-9]\d{0,14}", val):
             return int(val), "0"
         return val, "@"
@@ -297,7 +459,10 @@ def to_excel_value(col_name: str, raw_val):
     return val, None
 
 
-def build_excel_bytes(rows: list) -> bytes:
+def build_excel_bytes(rows: list, columns=None, col_types=None) -> bytes:
+    cols = columns if columns else OUTPUT_COLUMNS
+    types_map = col_types or {}
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Policy Entries"
@@ -305,15 +470,15 @@ def build_excel_bytes(rows: list) -> bytes:
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
 
-    for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
+    for col_idx, col_name in enumerate(cols, start=1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     for r_idx, row_dict in enumerate(rows, start=2):
-        for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
-            parsed_val, num_fmt = to_excel_value(col_name, row_dict.get(col_name, ""))
+        for col_idx, col_name in enumerate(cols, start=1):
+            parsed_val, num_fmt = to_excel_value(col_name, row_dict.get(col_name, ""), types_map.get(col_name, ""))
             cell = ws.cell(row=r_idx, column=col_idx, value=parsed_val)
             if num_fmt == "@":
                 cell.data_type = "s"
@@ -321,11 +486,12 @@ def build_excel_bytes(rows: list) -> bytes:
             elif num_fmt:
                 cell.number_format = num_fmt
 
-    for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
+    for col_idx, col_name in enumerate(cols, start=1):
         col_letter = ws.cell(row=1, column=col_idx).column_letter
+        c_type = types_map.get(col_name, "")
         ws.column_dimensions[col_letter].width = max(
             len(col_name) + 4,
-            22 if col_name in {"Policy Number", "PYP Number"} else 16
+            22 if c_type == "policy_id" or col_name in {"Policy Number", "PYP Number"} else 16
         )
 
     buf = io.BytesIO()
@@ -338,19 +504,28 @@ def build_sample_master_bytes() -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Client Master"
-    headers = ["Client Name", "Client Code", "Mobile", "Mail Id", "Sub agent", "Family code"]
+    headers = ["Client Name", "Client Code", "Occupation", "Mobile", "Mail Id", "Sub agent", "Family code"]
     ws.append(headers)
-    ws.append(["RAJESH SHARMA", "CL001", "9876543210", "rajesh@example.com", "AGENT A", "FAM01"])
+    ws.append(["RAJESH SHARMA", "CL001", "BUSINESS", "9876543210", "rajesh@example.com", "AGENT A", "FAM01"])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
 
-def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "", skip_duplicates: bool = True):
+def append_rows_to_local_excel(
+    file_path: str,
+    rows: list,
+    sheet_name: str = "",
+    skip_duplicates: bool = True,
+    custom_columns=None,
+    col_types=None,
+    policy_col: str = "Policy Number",
+    expiry_col: str = "Expiry Date",
+):
     """
     Fixed location wali local Excel (.xlsx) me purani entries ke neeche nayi entries directly save karta hai.
-    Returns (success, message, added_count, skipped_count, total_rows)
+    Existing sheet ke headers ko respect karta hai (zabardasti extra columns nahi jorta).
     """
     clean_path = str(file_path or "").strip().strip('"').strip("'")
     if not clean_path:
@@ -361,6 +536,9 @@ def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "",
     parent_dir = os.path.dirname(clean_path)
     if parent_dir and not os.path.exists(parent_dir):
         return False, f"Folder nahi mila: {parent_dir}", 0, 0, 0
+
+    target_cols = custom_columns if custom_columns else OUTPUT_COLUMNS
+    types_map = col_types or {}
 
     try:
         if os.path.exists(clean_path):
@@ -383,7 +561,7 @@ def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "",
         if not any(existing_headers):
             header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             header_font = Font(color="FFFFFF", bold=True)
-            for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
+            for col_idx, col_name in enumerate(target_cols, start=1):
                 cell = ws.cell(row=1, column=col_idx, value=col_name)
                 cell.fill = header_fill
                 cell.font = header_font
@@ -391,32 +569,27 @@ def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "",
                 col_letter = cell.column_letter
                 ws.column_dimensions[col_letter].width = max(
                     len(col_name) + 4,
-                    22 if col_name in {"Policy Number", "PYP Number"} else 16
+                    22 if types_map.get(col_name) == "policy_id" else 16
                 )
-            col_map = {name.lower(): idx for idx, name in enumerate(OUTPUT_COLUMNS, start=1)}
+            col_map = {name.lower(): idx for idx, name in enumerate(target_cols, start=1)}
+            active_headers = list(target_cols)
         else:
             col_map = {}
             for idx, h in enumerate(existing_headers, start=1):
-                if h:
+                if h and h.lower() not in col_map:
                     col_map[h.lower()] = idx
-            next_col = len(existing_headers) + 1
-            for col_name in OUTPUT_COLUMNS:
-                if col_name.lower() not in col_map:
-                    cell = ws.cell(row=1, column=next_col, value=col_name)
-                    cell.font = Font(bold=True)
-                    col_map[col_name.lower()] = next_col
-                    next_col += 1
+            active_headers = [h for h in existing_headers if h]
 
         last_row = 1
-        max_col = max(col_map.values())
+        max_col = max(col_map.values()) if col_map else 1
         for r in range(ws.max_row, 1, -1):
             if any(ws.cell(row=r, column=c).value not in (None, "") for c in range(1, max_col + 1)):
                 last_row = r
                 break
 
         existing_keys = set()
-        pno_col = col_map.get("policy number")
-        exp_col = col_map.get("expiry date")
+        pno_col = col_map.get(policy_col.lower()) or col_map.get("policy number")
+        exp_col = col_map.get(expiry_col.lower()) or col_map.get("expiry date")
         if skip_duplicates and pno_col and last_row > 1:
             for r in range(2, last_row + 1):
                 p_val = str(ws.cell(row=r, column=pno_col).value or "").strip().lstrip(",")
@@ -429,23 +602,26 @@ def append_rows_to_local_excel(file_path: str, rows: list, sheet_name: str = "",
         write_row = last_row + 1
 
         for row_dict in rows:
-            pno_norm = str(row_dict.get("Policy Number", "") or "").strip().lstrip(",")
-            exp_norm = str(row_dict.get("Expiry Date", "") or "").strip()
+            lower_row = {str(k).strip().lower(): v for k, v in row_dict.items()}
+            pno_norm = str(lower_row.get(policy_col.lower(), lower_row.get("policy number", "")) or "").strip().lstrip(",")
+            exp_norm = str(lower_row.get(expiry_col.lower(), lower_row.get("expiry date", "")) or "").strip()
             key = (pno_norm, exp_norm)
 
             if skip_duplicates and pno_norm and key in existing_keys:
                 skipped += 1
                 continue
 
-            for col_name in OUTPUT_COLUMNS:
-                c_idx = col_map[col_name.lower()]
-                parsed_val, num_fmt = to_excel_value(col_name, row_dict.get(col_name, ""))
-                cell = ws.cell(row=write_row, column=c_idx, value=parsed_val)
-                if num_fmt == "@":
-                    cell.data_type = "s"
-                    cell.number_format = "@"
-                elif num_fmt:
-                    cell.number_format = num_fmt
+            for h_name in active_headers:
+                h_low = h_name.lower()
+                if h_low in lower_row:
+                    c_idx = col_map[h_low]
+                    parsed_val, num_fmt = to_excel_value(h_name, lower_row[h_low], types_map.get(h_name, ""))
+                    cell = ws.cell(row=write_row, column=c_idx, value=parsed_val)
+                    if num_fmt == "@":
+                        cell.data_type = "s"
+                        cell.number_format = "@"
+                    elif num_fmt:
+                        cell.number_format = num_fmt
 
             if pno_norm:
                 existing_keys.add(key)
