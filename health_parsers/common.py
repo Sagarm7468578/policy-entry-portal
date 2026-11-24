@@ -1,7 +1,7 @@
 import io
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import pandas as pd
 import pymupdf
 from pypdf import PdfReader
@@ -19,6 +19,9 @@ OUTPUT_COLUMNS = [
     "PYP Number", "Share", "Share %", "Family code", "Date of Entry",
     "DOB", "OUR RENEWAL"
 ]
+
+DATE_FIELDS = {"Inception Date", "Expiry Date", "Reminder Date", "Date of Entry", "DOB"}
+DATE_FIELDS_LOWER = {c.lower() for c in DATE_FIELDS}
 
 ALL_SYSTEM_FIELDS = OUTPUT_COLUMNS + ["Occupation", "Accounts"]
 SYSTEM_FIELD_LOOKUP = {f.lower(): f for f in ALL_SYSTEM_FIELDS}
@@ -251,6 +254,8 @@ def get_custom_schema_info(spec_str: str) -> dict:
             col_types[dst] = "policy_id"
         elif canonical in {"Client Code", "Family code"}:
             col_types[dst] = "code_id"
+        elif canonical in DATE_FIELDS:
+            col_types[dst] = "date"
         else:
             col_types[dst] = "text"
 
@@ -339,12 +344,16 @@ def get_company_scores(pdf_text: str) -> dict:
     return dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))
 
 
-def parse_any_date(date_str: str):
+def parse_any_date(date_str):
     if not date_str:
         return None
-    clean = re.sub(r"\s+", " ", date_str.strip()).replace("/", "-").replace(",", "")
+    if isinstance(date_str, datetime):
+        return date_str
+    if isinstance(date_str, date):
+        return datetime(date_str.year, date_str.month, date_str.day)
+    clean = re.sub(r"\s+", " ", str(date_str).strip()).replace("/", "-").replace(",", "")
     formats = [
-        "%d-%m-%Y", "%d-%m-%y", "%d-%b-%Y", "%d-%b-%y",
+        "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%d-%b-%Y", "%d-%b-%y",
         "%b %d %Y", "%B %d %Y", "%d %b %Y", "%d %B %Y"
     ]
     for fmt in formats:
@@ -357,6 +366,18 @@ def parse_any_date(date_str: str):
 
 def fmt_date(dt) -> str:
     return dt.strftime("%d-%m-%Y") if dt else ""
+
+
+def _norm_date_key(val) -> str:
+    if val is None or val == "":
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%d-%m-%Y")
+    if isinstance(val, date):
+        return val.strftime("%d-%m-%Y")
+    s = str(val).strip()
+    dt = parse_any_date(s)
+    return dt.strftime("%d-%m-%Y") if dt else s
 
 
 def clean_amount(val: str) -> str:
@@ -518,6 +539,10 @@ def lookup_client_master(client_name: str, master_df: pd.DataFrame) -> dict:
 
 
 def to_excel_value(col_name: str, raw_val, col_type: str = ""):
+    if isinstance(raw_val, (datetime, date)):
+        d_obj = raw_val.date() if isinstance(raw_val, datetime) else raw_val
+        return d_obj, "dd-mm-yyyy"
+
     val = str(raw_val if raw_val is not None else "").strip()
     if not val:
         return "", None
@@ -533,8 +558,16 @@ def to_excel_value(col_name: str, raw_val, col_type: str = ""):
             t = "policy_id"
         elif c_low in {"client code", "family code"}:
             t = "code_id"
+        elif c_low in DATE_FIELDS_LOWER:
+            t = "date"
         else:
             t = "text"
+
+    if t == "date":
+        dt = parse_any_date(val)
+        if dt:
+            return dt.date(), "dd-mm-yyyy"
+        return val, None
 
     if t == "number":
         cleaned = val.replace(",", "").replace("%", "").strip()
@@ -684,7 +717,7 @@ def _append_rows_to_workbook(
     if skip_duplicates and pno_col and last_row > 1:
         for r in range(2, last_row + 1):
             p_val = str(ws.cell(row=r, column=pno_col).value or "").strip().lstrip(",")
-            e_val = str(ws.cell(row=r, column=exp_col).value or "").strip() if exp_col else ""
+            e_val = _norm_date_key(ws.cell(row=r, column=exp_col).value) if exp_col else ""
             if p_val:
                 existing_keys.add((p_val, e_val))
 
@@ -695,7 +728,7 @@ def _append_rows_to_workbook(
     for row_dict in rows:
         lower_row = {str(k).strip().lower(): v for k, v in row_dict.items()}
         pno_norm = str(lower_row.get(policy_col.lower(), lower_row.get("policy number", "")) or "").strip().lstrip(",")
-        exp_norm = str(lower_row.get(expiry_col.lower(), lower_row.get("expiry date", "")) or "").strip()
+        exp_norm = _norm_date_key(lower_row.get(expiry_col.lower(), lower_row.get("expiry date", "")))
         key = (pno_norm, exp_norm)
 
         if skip_duplicates and pno_norm and key in existing_keys:
