@@ -10,12 +10,12 @@ from portal.state import (
 from portal.sidebar import render_sidebar
 from portal.workspace import render_workspace
 
-st.set_page_config(page_title="Policy Entry Portal", page_icon="📄", layout="wide")
+st.set_page_config(page_title="Soft.SM Policy Mitra", page_icon="🛡️", layout="wide")
 
 init_session_state()
 google_configured, google_logged_in, g_email = handle_auto_google_login()
 
-# Clients ke liye top-right Share/GitHub/Menu aur bottom Streamlit/Manage chrome hide karein (Admin ko sab dikhega)
+# Hide Streamlit toolbar, menu, and badges for non-admin clients
 if not is_admin_user():
     st.markdown(
         """
