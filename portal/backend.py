@@ -40,7 +40,7 @@ def load_saved_health_rows(user_id):
     res = call_backend({"action": "get_health_entries", "user_id": user_id})
     if res.get("success"):
         return res.get("rows", []), ""
-    return [], res.get("message", "Saved data load nahi ho paya.")
+    return [], res.get("message", "Unable to load saved entries.")
 
 
 def load_user_sheet_settings(user_id):
@@ -78,7 +78,7 @@ def fetch_linked_client_master(sheet_url, sheet_tab=""):
         "sheet_tab": (sheet_tab or "").strip(),
     })
     if not res.get("success"):
-        return None, "", res.get("message", "Client Master Google Sheet load nahi ho payi.")
+        return None, "", res.get("message", "Unable to load Client Master sheet.")
     headers, rows = res.get("headers", []), res.get("rows", [])
     sheet_name = res.get("sheet_name", "Client Master Sheet")
     return (pd.DataFrame(rows, columns=headers, dtype=str) if headers else pd.DataFrame()), sheet_name, ""
@@ -93,7 +93,7 @@ def fetch_linked_accounts_master(sheet_url, sheet_tab=""):
         "sheet_tab": (sheet_tab or "").strip(),
     })
     if not res.get("success"):
-        return None, "", res.get("message", "Accounts Master sheet load nahi ho payi.")
+        return None, "", res.get("message", "Unable to load Accounts Master sheet.")
 
     sheet_name = res.get("sheet_name", "Accounts Master")
     if res.get("is_excel") and res.get("content_b64"):
@@ -109,7 +109,7 @@ def fetch_linked_accounts_master(sheet_url, sheet_tab=""):
                 and any(k in cols_low for k in ("accounts", "account", "account name"))
             )
             if not ok_cols:
-                return None, sheet_name, "Accounts Master me 'Company Name', 'Agency', aur 'Accounts' columns Row 1 me hone chahiye."
+                return None, sheet_name, "Row 1 must include 'Company Name', 'Agency', and 'Accounts' columns."
             return df, sheet_name, ""
         except Exception as e:
             return None, sheet_name, f"Accounts Master Excel read error: {e}"
@@ -168,7 +168,7 @@ def apply_renewal_list_lookup(extracted_rows, renewal_folder_url):
 
 def scan_drive_folder_pdfs(user_id, folder_url, year_folder="", month_folder=""):
     if not folder_url:
-        return None, "Drive folder link nahi hai."
+        return None, "Google Drive folder is not linked."
     res = call_backend({
         "action": "list_drive_pdfs", "user_id": user_id,
         "folder_url": folder_url.strip(),
@@ -176,7 +176,7 @@ def scan_drive_folder_pdfs(user_id, folder_url, year_folder="", month_folder="")
         "month_folder": (month_folder or "").strip(),
     })
     if not res.get("success"):
-        return None, res.get("message", "Google Drive folder scan nahi ho paya.")
+        return None, res.get("message", "Unable to scan Google Drive folder.")
     return {
         "root_folder_name": res.get("root_folder_name", ""),
         "active_folder_id": res.get("active_folder_id", ""),
@@ -193,22 +193,22 @@ def scan_drive_folder_pdfs(user_id, folder_url, year_folder="", month_folder="")
 def fetch_headers_from_drive_target(target_url, target_tab=""):
     g_res = call_backend({"action": "get_drive_excel", "sheet_url": target_url.strip()})
     if not g_res.get("success"):
-        return [], g_res.get("message", "File access nahi ho payi.")
+        return [], g_res.get("message", "Unable to access target file.")
     if g_res.get("is_google_sheet"):
         h_res = call_backend({"action": "get_sheet_headers", "sheet_url": target_url.strip(), "sheet_tab": target_tab.strip()})
         if h_res.get("success") and h_res.get("headers"):
             return h_res["headers"], ""
-        return [], h_res.get("message", "Sheet ki Row 1 khali hai.")
+        return [], h_res.get("message", "Row 1 of the sheet is currently empty.")
     hdrs, _, err = read_excel_headers_from_bytes(base64.b64decode(g_res["content_b64"]), target_tab)
     if err:
         return [], err
-    return (hdrs, "") if hdrs else ([], "Excel file ki Row 1 abhi khali hai.")
+    return (hdrs, "") if hdrs else ([], "Row 1 of the Excel file is currently empty.")
 
 
 def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schema, skip_duplicates, mode_tag):
     probe = call_backend({"action": "get_drive_excel", "sheet_url": target_url.strip()})
     if not probe.get("success"):
-        return False, "", f"❌ Target file open nahi hui: {probe.get('message', 'Unknown error')}", 0, ""
+        return False, "", f"❌ Could not open target file: {probe.get('message', 'Unknown error')}", 0, ""
 
     if probe.get("is_google_sheet"):
         g_res = call_backend({
@@ -221,9 +221,9 @@ def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schem
         if g_res.get("success"):
             skipped_cnt, added_cnt = g_res.get("skipped", 0), g_res.get("added", 0)
             s_name, t_name = g_res.get("sheet_name", "Google Sheet"), g_res.get("tab_name", target_tab or "Policy Entries")
-            msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag} Direct Save: {added_cnt} nayi entries seedha '{s_name} → {t_name}' me save ho gayi! (Total Entries: {g_res.get('total_rows', '')})"
+            msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag}: Saved {added_cnt} new entries to '{s_name} → {t_name}' (Total Entries: {g_res.get('total_rows', '')})"
             return True, msg, "", skipped_cnt, s_name
-        return False, "", f"❌ Google Sheet save fail: {g_res.get('message', 'Unknown error')}", 0, ""
+        return False, "", f"❌ Google Sheet save failed: {g_res.get('message', 'Unknown error')}", 0, ""
 
     file_name = probe.get("file_name", "Excel File.xlsx")
     file_id = probe.get("file_id", "")
@@ -238,7 +238,7 @@ def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schem
     if not ok:
         return False, "", f"❌ {err_msg}", skipped_cnt, file_name
     if added_cnt == 0:
-        msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag}: Koi nayi entry add nahi hui ({skipped_cnt} duplicates pehle se '{file_name}' me saved the)."
+        msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag}: No new entries added ({skipped_cnt} duplicates already existed in '{file_name}')."
         return True, msg, "", skipped_cnt, file_name
 
     up_res = call_backend({
@@ -246,9 +246,9 @@ def save_rows_to_drive_target(target_url, target_tab, projected_rows, used_schem
         "mime_type": mime_type, "content_b64": base64.b64encode(updated_bytes).decode("ascii"),
     }, timeout=120)
     if up_res.get("success"):
-        msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag} Direct Excel Save: **{added_cnt}** nayi entries seedha `{file_name}` (Tab: `{used_tab}`) me save ho gayi! (Total Entries: **{total_cnt}**)"
+        msg = "ENTRY DONE PLS RECHECK NOW" if mode_tag.startswith("Mode 3") else f"✅ {mode_tag}: Saved **{added_cnt}** new entries directly to `{file_name}` (Tab: `{used_tab}` | Total Entries: **{total_cnt}**)"
         return True, msg, "", skipped_cnt, file_name
-    return False, "", f"❌ Google Drive Excel update fail: {up_res.get('message', 'Unknown error')}", skipped_cnt, file_name
+    return False, "", f"❌ Google Drive Excel update failed: {up_res.get('message', 'Unknown error')}", skipped_cnt, file_name
 
 
 def load_local_excel_path():
