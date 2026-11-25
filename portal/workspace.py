@@ -67,7 +67,7 @@ def _render_quick_pdf_inspector(all_drive_files, ctx, active_headers):
         return
 
     with st.expander("🔍 Quick PDF Text & Bugging Inspector (No Entry Required)", expanded=False):
-        st.caption("Select any PDF from this folder to instantly copy its raw text and run a live Dry-Run extraction test without saving to Excel.")
+        st.caption("Select any PDF from this folder to download its raw text and run a live Dry-Run extraction test without saving to Excel.")
         options = ["-- Select a PDF to inspect --"] + [f"{i + 1}. {f['name']}" for i, f in enumerate(all_drive_files)]
         picked_idx = st.selectbox(
             "Select PDF for Bugging",
@@ -120,8 +120,7 @@ def _render_quick_pdf_inspector(all_drive_files, ctx, active_headers):
             mime="text/plain",
             key=f"quick_dl_txt_{fid}",
         )
-        with st.expander("📋 Click to Copy PDF Text", expanded=True):
-            st.code(raw_txt, language=None)
+        st.caption(f"Raw PDF text ready ({len(raw_txt):,} characters) — click Download Raw PDF Text (.txt) above.")
 
 
 def _render_mode3_workspace(ctx, active_headers):
@@ -190,7 +189,6 @@ def _render_mode3_workspace(ctx, active_headers):
         st.info("✅ No PDF files found in this folder. Add Health Policy PDFs and click **Scan Folder**.")
         return
 
-    # Admin-only Quick PDF Text Inspector (works immediately without running Entry Process)
     _render_quick_pdf_inspector(all_drive_files, ctx, active_headers)
 
     include_done = True
@@ -468,9 +466,7 @@ def _render_admin_debug():
 
             raw_txt = selected_debug["raw_text"] or ""
             st.download_button("📄 Download Raw PDF Text (.txt)", data=raw_txt.encode("utf-8"), file_name=f"DEBUG_{selected_debug['file_name']}.txt", mime="text/plain", key=f"debug_dl_{chosen_batch['round_no']}_{selected_pdf_idx}")
-            st.text_area(f"Extracted PDF Text ({len(raw_txt)} characters):", value=raw_txt, height=380, key=f"debug_textarea_{chosen_batch['round_no']}_{selected_pdf_idx}_{selected_debug['file_name']}")
-            with st.expander("📋 Click to Copy PDF Text"):
-                st.code(raw_txt, language=None)
+            st.caption(f"Raw PDF text ready ({len(raw_txt):,} characters) — click Download Raw PDF Text (.txt) above.")
 
 
 def render_workspace(ctx, active_headers, is_custom_cols):
