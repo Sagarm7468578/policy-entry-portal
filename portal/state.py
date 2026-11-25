@@ -41,6 +41,7 @@ DEFAULTS = {
     "drive_scan_info": None, "drive_scan_error": "", "drive_last_scan_key": "",
     "drive_selected_year": "", "drive_selected_month": "",
     "drive_pdf_sel_ver": 0, "drive_pdf_sel_default": True, "drive_pdf_list_sig": "",
+    "quick_pdf_bytes_cache": {},
     "linked_master_df": None, "linked_master_error": "",
     "local_excel_path": "", "local_sheet_name": "Policy Entries",
 }
@@ -49,7 +50,7 @@ DEFAULTS = {
 def init_session_state():
     for k, v in DEFAULTS.items():
         if k not in st.session_state:
-            st.session_state[k] = v
+            st.session_state[k] = v.copy() if isinstance(v, (dict, list)) else v
 
 
 def is_google_auth_configured():
@@ -72,7 +73,7 @@ def handle_auto_google_login():
     google_configured = is_google_auth_configured()
     google_logged_in, g_email, g_name = get_google_user_info()
     if google_logged_in and g_email and not st.session_state.logged_in:
-        with st.spinner("Google account verify ho raha hai..."):
+        with st.spinner("Verifying Google account..."):
             g_res = call_backend({"action": "google_login", "email": g_email})
         if g_res.get("success"):
             st.session_state.update({
@@ -83,40 +84,42 @@ def handle_auto_google_login():
                 "linked_master_df": None, "linked_master_error": "",
                 "health_accounts_df": None, "motor_accounts_df": None, "sme_accounts_df": None,
                 "drive_scan_info": None, "drive_last_scan_key": "", "batch_history": [], "round_counter": 0,
+                "quick_pdf_bytes_cache": {},
             })
             st.rerun()
         else:
-            st.session_state.google_auth_error = g_res.get("message", "Yeh Gmail account registered/active nahi hai.")
+            st.session_state.google_auth_error = g_res.get("message", "This Google account is not registered or active.")
     return google_configured, google_logged_in, g_email
 
 
 def render_login_screen(google_configured, google_logged_in, g_email):
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
-        st.title("🔐 Policy Entry Software Login")
+        st.title("🛡️ Soft.SM Policy Mitra")
+        st.caption("All-in-One Insurance Advisor Automation Suite")
         if google_logged_in and st.session_state.google_auth_error:
             st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
-            st.info("Agar aapne apna plan activate karwa liya hai, to Admin se is Gmail ko `Users` sheet me add karwayein ya dusre Gmail se login karein.")
-            if st.button("🔄 Dusre Google Account se Login Karein", type="primary", use_container_width=True):
+            st.info("If your subscription is active, please contact the Administrator to register this Gmail address, or sign in with a different Google account.")
+            if st.button("🔄 Sign in with Another Google Account", type="primary", use_container_width=True):
                 st.session_state.google_auth_error = ""
                 st.logout()
         elif google_configured:
-            st.write("Ek baar Google se login karein — jab tak aap Logout nahi karenge, portal hamesha logged in rahega.")
+            st.write("Sign in once with Google to stay logged in until you manually sign out.")
             if st.button("🔵 Continue with Google", type="primary", use_container_width=True):
                 st.login()
         else:
-            st.warning("⚠️ Google Login abhi Streamlit Secrets (`[auth]`) me configure nahi hua hai. Neeche Password se login kar sakte hain.")
+            st.warning("⚠️ Google Sign-In is not configured in Streamlit Secrets (`[auth]`). Use Password Sign-In below.")
 
         st.divider()
-        with st.expander("🔑 User ID & Password se Login (Backup Option)", expanded=not google_configured):
+        with st.expander("🔑 Sign in with User ID & Password (Backup)", expanded=not google_configured):
             with st.form("login_form"):
                 user_id = st.text_input("User ID")
                 password = st.text_input("Password", type="password")
-                if st.form_submit_button("Login", use_container_width=True):
+                if st.form_submit_button("Sign In", use_container_width=True):
                     if not user_id or not password:
-                        st.warning("User ID aur Password dono bharein.")
+                        st.warning("Please enter both User ID and Password.")
                     else:
-                        with st.spinner("Check kar rahe hain..."):
+                        with st.spinner("Verifying credentials..."):
                             result = call_backend({"action": "login", "user_id": user_id, "password": password})
                         if result.get("success"):
                             st.session_state.update({
@@ -126,16 +129,17 @@ def render_login_screen(google_configured, google_logged_in, g_email):
                                 "settings_loaded": False, "linked_master_df": None, "linked_master_error": "",
                                 "health_accounts_df": None, "motor_accounts_df": None, "sme_accounts_df": None,
                                 "drive_scan_info": None, "drive_last_scan_key": "", "batch_history": [], "round_counter": 0,
+                                "quick_pdf_bytes_cache": {},
                             })
                             st.rerun()
                         else:
-                            st.error(result.get("message", "Login fail ho gaya."))
+                            st.error(result.get("message", "Invalid credentials."))
 
 
 def ensure_settings_loaded():
     if st.session_state.settings_loaded:
         return
-    with st.spinner("Aapki linked sheets, Accounts Masters, Renewal Lists aur folders load ho rahe hain..."):
+    with st.spinner("Loading your linked sheets, masters, renewal lists, and Drive folders..."):
         cfg = load_user_sheet_settings(st.session_state.user_id)
         l_path, l_tab = load_local_excel_path()
         for k, v in cfg.items():
@@ -162,7 +166,7 @@ def get_active_master_df(manual_master_file):
             manual_master_file.seek(0)
             return pd.read_csv(manual_master_file, dtype=str) if manual_master_file.name.lower().endswith(".csv") else pd.read_excel(manual_master_file, dtype=str)
         except Exception as e:
-            st.warning(f"Client Master read nahi ho payi ({e}). Bina master ke entry kar rahe hain.")
+            st.warning(f"Could not read Client Master ({e}). Proceeding without Client Master.")
     return None
 
 
@@ -175,7 +179,7 @@ def get_active_accounts_df(cat_key, manual_acc_files):
             up_file.seek(0)
             return pd.read_csv(up_file, dtype=str) if up_file.name.lower().endswith(".csv") else pd.read_excel(up_file, dtype=str)
         except Exception as e:
-            st.warning(f"Accounts Master read nahi ho payi ({e}). Bina Accounts Master ke entry kar rahe hain.")
+            st.warning(f"Could not read Accounts Master ({e}). Proceeding without Accounts Master.")
     return None
 
 
@@ -189,7 +193,7 @@ def save_and_record_batch(
 
     if is_direct_sheet:
         if mode2_target_type == "local_excel":
-            with st.spinner("Fixed Local Excel (.xlsx) me save ho raha hai..."):
+            with st.spinner("Saving entries to linked Local Excel (.xlsx)..."):
                 ok, msg, added, skipped, total_cnt = append_rows_to_local_excel(
                     st.session_state.local_excel_path, projected_rows,
                     sheet_name=st.session_state.local_sheet_name, skip_duplicates=skip_duplicates,
@@ -199,7 +203,7 @@ def save_and_record_batch(
             skipped_count = skipped
             save_msg, save_error = (f"✅ {mode_tag} Direct Save: {msg} (Total Entries: {total_cnt})", "") if ok else ("", f"❌ {msg}")
         else:
-            with st.spinner("Aapki Linked Google Drive Excel / Sheet me save ho raha hai..."):
+            with st.spinner("Saving entries directly to linked Google Drive Excel / Sheet..."):
                 ok, s_msg, s_err, skipped_cnt, resolved_name = save_rows_to_drive_target(
                     drive_target_url, drive_target_tab, projected_rows, used_schema, skip_duplicates, mode_tag
                 )
@@ -226,13 +230,13 @@ def save_and_record_batch(
                     existing_keys.add(key)
 
         if new_rows_to_save:
-            with st.spinner("Nayi entries aapki Mode 1 master sheet me save ho rahi hain..."):
+            with st.spinner("Saving new entries to your Cloud Master Sheet..."):
                 save_res = call_backend({"action": "save_health_entries", "user_id": st.session_state.user_id, "rows": new_rows_to_save})
             st.session_state.saved_health_rows.extend(new_rows_to_save)
             save_msg = (
-                f"✅ {len(new_rows_to_save)} nayi entries '{DEFAULT_HEALTH_EXCEL_NAME}' me save ho gayi!"
+                f"✅ Saved {len(new_rows_to_save)} new entries to '{DEFAULT_HEALTH_EXCEL_NAME}'."
                 if save_res.get("success")
-                else f"⚠️ Cloud save notice ({save_res.get('message', '')}), entries session me add ho gayi hain."
+                else f"⚠️ Cloud sync notice ({save_res.get('message', '')}). Entries have been added to your current session."
             )
 
     if not mode_tag.startswith("Mode 3"):
