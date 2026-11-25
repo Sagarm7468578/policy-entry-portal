@@ -6,6 +6,10 @@ from health_parsers.plans.star_health_assure import (
     is_star_health_assure,
     parse_star_health_assure,
 )
+from health_parsers.plans.star_medi_classic_individual import (
+    is_star_medi_classic_individual,
+    parse_star_medi_classic_individual,
+)
 
 # Plan-wise isolated parsers (main company parsers remain untouched)
 PLAN_PARSERS = {
@@ -14,6 +18,7 @@ PLAN_PARSERS = {
     ],
     "STAR HEALTH": [
         (is_star_health_assure, parse_star_health_assure),
+        (is_star_medi_classic_individual, parse_star_medi_classic_individual),
     ],
 }
 
