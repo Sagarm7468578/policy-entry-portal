@@ -36,7 +36,7 @@ def _render_category_folder_panel(title, caption, folder_specs, expanded=False, 
                     if curr_url.startswith("http"):
                         st.link_button(f"🔗 Open {cat_label} Folder", curr_url, use_container_width=True)
                     if st.button(f"🔓 Unlink {cat_label}", use_container_width=True, key=f"unlink_{url_key}"):
-                        with st.spinner("Unlink ho raha hai..."):
+                        with st.spinner("Unlinking folder..."):
                             u_res = save_user_sheet_settings(st.session_state.user_id, **{url_key: ""})
                         if u_res.get("success"):
                             st.session_state[url_key] = st.session_state[name_key] = ""
@@ -44,18 +44,18 @@ def _render_category_folder_panel(title, caption, folder_specs, expanded=False, 
                                 st.session_state.update({"drive_scan_info": None, "drive_last_scan_key": "", "drive_selected_year": "", "drive_selected_month": ""})
                             st.rerun()
                         else:
-                            st.error(u_res.get("message", "Unlink nahi ho paya."))
+                            st.error(u_res.get("message", "Failed to unlink folder."))
                 else:
                     f_inp = st.text_input(f"{cat_label} Drive Folder Link", placeholder="https://drive.google.com/drive/folders/...", key=f"inp_{url_key}")
                     if st.button(f"🔗 Link {cat_label} Folder", type="primary", use_container_width=True, key=f"btn_{url_key}"):
                         clean_f = f_inp.strip()
                         if not clean_f:
-                            st.warning("Google Drive Folder link dalein.")
+                            st.warning("Please paste a valid Google Drive folder link.")
                         else:
-                            with st.spinner("Folder verify & link ho raha hai..."):
+                            with st.spinner("Verifying and linking folder..."):
                                 v_res = call_backend({"action": "verify_drive_folder", "folder_url": clean_f})
                                 if not v_res.get("success"):
-                                    st.error(v_res.get("message", "Folder access nahi ho paya. Folder ko Viewer/Editor share karein."))
+                                    st.error(v_res.get("message", "Could not access folder. Ensure Viewer/Editor sharing permission is enabled."))
                                 else:
                                     s_res = save_user_sheet_settings(st.session_state.user_id, **{url_key: clean_f})
                                     if s_res.get("success"):
@@ -64,7 +64,7 @@ def _render_category_folder_panel(title, caption, folder_specs, expanded=False, 
                                             st.session_state.update({"drive_scan_info": None, "drive_last_scan_key": "", "drive_selected_year": "", "drive_selected_month": ""})
                                         st.rerun()
                                     else:
-                                        st.error(s_res.get("message", "Save nahi ho paya."))
+                                        st.error(s_res.get("message", "Failed to save folder link."))
                     if footer_tip:
                         st.caption(footer_tip)
 
@@ -87,7 +87,17 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
         )
         is_mode1, is_mode2, is_mode3 = working_mode.startswith("Mode 1"), working_mode.startswith("Mode 2"), working_mode.startswith("Mode 3")
         is_direct_sheet = is_mode2 or is_mode3
-        policy_category = st.selectbox("📂 Policy Type", ["Health Insurance", "Motor Insurance (Coming Soon)", "SME Insurance (Coming Soon)"])
+        policy_category = st.selectbox(
+            "📂 Module / Policy Type",
+            [
+                "Health Insurance",
+                "Motor Insurance (Coming Soon)",
+                "SME Insurance (Coming Soon)",
+                "LIC Due Reminders (Coming Soon)",
+                "SME Renewal Messages (Coming Soon)",
+                "Client Birthday Wishes (Coming Soon)",
+            ],
+        )
         st.divider()
 
         # 1. MODE 3: DRIVE EXCEL + AUTO-FOLDERS
@@ -96,41 +106,41 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
             with st.expander(f"📊 Mode 3 Drive Excel ({'✅ Linked' if is_m3_excel_linked else '⚪ Not Linked'})", expanded=not is_m3_excel_linked):
                 if is_m3_excel_linked:
                     ex_title = f"**{st.session_state.mode3_excel_name}**  \n" if st.session_state.mode3_excel_name else ""
-                    st.success(f"{ex_title}📑 Tab: `{st.session_state.mode3_excel_tab or '1st Tab (Auto)'}`  \nDirect in-place `.xlsx` auto-save active!")
+                    st.success(f"{ex_title}📑 Tab: `{st.session_state.mode3_excel_tab or '1st Tab (Auto)'}`  \nDirect in-place `.xlsx` auto-save active")
                     if st.session_state.mode3_excel_url.startswith("http"):
                         st.link_button("🔗 Open Drive Excel File", st.session_state.mode3_excel_url, use_container_width=True)
                     if st.button("🔓 Unlink Drive Excel", use_container_width=True, key="unlink_m3_excel"):
-                        with st.spinner("Unlink ho raha hai..."):
+                        with st.spinner("Unlinking Drive Excel..."):
                             u_res = save_user_sheet_settings(st.session_state.user_id, mode3_excel_url="", mode3_excel_tab="")
                         if u_res.get("success"):
                             st.session_state.mode3_excel_url = st.session_state.mode3_excel_tab = st.session_state.mode3_excel_name = ""
                             st.rerun()
                         else:
-                            st.error(u_res.get("message", "Unlink nahi ho paya."))
+                            st.error(u_res.get("message", "Failed to unlink file."))
                 else:
                     m3_url_inp = st.text_input("Google Drive Excel (.xlsx) Link", placeholder="https://drive.google.com/file/d/.../view", key="m3_excel_url_input")
                     m3_tab_inp = st.text_input("Excel Sheet Tab (Blank = 1st Tab)", value="", key="m3_excel_tab_input")
                     if st.button("🔗 Link Drive Excel Permanently", type="primary", use_container_width=True, key="btn_link_m3_excel"):
                         clean_u, clean_t = m3_url_inp.strip(), m3_tab_inp.strip()
                         if not clean_u:
-                            st.warning("Apni Google Drive `.xlsx` Excel file ka Share Link dalein.")
+                            st.warning("Please paste the Share Link of your Google Drive `.xlsx` Excel file.")
                         else:
-                            with st.spinner("Google Drive Excel verify & link ho rahi hai..."):
+                            with st.spinner("Verifying and linking Google Drive Excel..."):
                                 v_res = call_backend({"action": "verify_sheet", "sheet_url": clean_u})
                                 if not v_res.get("success"):
-                                    st.error(v_res.get("message", "Excel file access nahi ho payi."))
+                                    st.error(v_res.get("message", "Could not access Excel file."))
                                 else:
                                     s_res = save_user_sheet_settings(st.session_state.user_id, mode3_excel_url=clean_u, mode3_excel_tab=clean_t)
                                     if s_res.get("success"):
                                         st.session_state.mode3_excel_url, st.session_state.mode3_excel_tab, st.session_state.mode3_excel_name = clean_u, clean_t, v_res.get("sheet_name", "")
                                         st.rerun()
                                     else:
-                                        st.error(s_res.get("message", "Save nahi ho paya."))
-                    st.caption("💡 Google Drive me `.xlsx` file par Right-click → Share (Editor) → Copy link yahan paste karein.")
+                                        st.error(s_res.get("message", "Failed to save link."))
+                    st.caption("💡 In Google Drive, right-click the `.xlsx` file → Share (Editor) → Copy link and paste above.")
 
             _render_category_folder_panel(
                 title="📁 Drive Auto-Folders",
-                caption="Main parent folder (`MEDICLAIM` / `MOTOR` / `SME`) ya direct month folder (`NOVEMBER 2026`) ka link 1 baar dalein.",
+                caption="Link your main parent folder (`MEDICLAIM` / `MOTOR` / `SME`) or a direct month folder once.",
                 folder_specs=[
                     ("Health", "health_folder_url", "health_folder_name"),
                     ("Motor", "motor_folder_url", "motor_folder_name"),
@@ -160,7 +170,7 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                         if st.button("🔗 Link Path", type="primary", use_container_width=True):
                             clean_p = l_path_inp.strip().strip('"')
                             if not clean_p:
-                                st.warning("Path dalein.")
+                                st.warning("Please enter a valid file path.")
                             else:
                                 st.session_state.local_excel_path = clean_p
                                 st.session_state.local_sheet_name = l_tab_inp.strip() or "Policy Entries"
@@ -174,33 +184,33 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                         if st.session_state.fixed_sheet_url.startswith("http"):
                             st.link_button("🔗 Open Policy Sheet", st.session_state.fixed_sheet_url, use_container_width=True)
                         if st.button("🔓 Unlink Policy Sheet", use_container_width=True, key="unlink_policy_gsheet"):
-                            with st.spinner("Unlink kar rahe hain..."):
+                            with st.spinner("Unlinking Policy Sheet..."):
                                 u_res = save_user_sheet_settings(st.session_state.user_id, fixed_sheet_url="", fixed_sheet_tab="Policy Entries")
                             if u_res.get("success"):
                                 st.session_state.fixed_sheet_url, st.session_state.fixed_sheet_tab, st.session_state.fixed_sheet_name = "", "Policy Entries", ""
                                 st.rerun()
                             else:
-                                st.error(u_res.get("message", "Unlink nahi ho paya."))
+                                st.error(u_res.get("message", "Failed to unlink sheet."))
                     else:
                         s_url_inp = st.text_input("Policy Sheet / Drive Excel URL", placeholder="https://docs.google.com/spreadsheets/d/...", key="policy_sheet_url_input")
                         s_tab_inp = st.text_input("Sheet Tab Name", value=st.session_state.fixed_sheet_tab or "Policy Entries", key="policy_sheet_tab_input")
                         if st.button("🔗 Link Policy Sheet", type="primary", use_container_width=True):
                             clean_url, clean_tab = s_url_inp.strip(), s_tab_inp.strip() or "Policy Entries"
                             if not clean_url:
-                                st.warning("Google Sheet ya Drive Excel URL dalein.")
+                                st.warning("Please enter a Google Sheet or Drive Excel URL.")
                             else:
-                                with st.spinner("Verify & link ho raha hai..."):
+                                with st.spinner("Verifying and linking sheet..."):
                                     v_res = call_backend({"action": "verify_sheet", "sheet_url": clean_url})
                                     if not v_res.get("success"):
-                                        st.error(v_res.get("message", "File access nahi ho payi."))
+                                        st.error(v_res.get("message", "Could not access file."))
                                     else:
                                         s_res = save_user_sheet_settings(st.session_state.user_id, fixed_sheet_url=clean_url, fixed_sheet_tab=clean_tab)
                                         if s_res.get("success"):
                                             st.session_state.fixed_sheet_url, st.session_state.fixed_sheet_tab, st.session_state.fixed_sheet_name = clean_url, clean_tab, v_res.get("sheet_name", "")
                                             st.rerun()
                                         else:
-                                            st.error(s_res.get("message", "Save nahi ho paya."))
-                        st.caption("💡 File ko Editor permission ke saath share karein.")
+                                            st.error(s_res.get("message", "Failed to save link."))
+                        st.caption("💡 Share the file with Editor permission before linking.")
 
         # 3. CLIENT MASTER PANEL
         m_df = st.session_state.linked_master_df
@@ -217,20 +227,20 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                 mc1, mc2 = st.columns(2)
                 with mc1:
                     if st.button("🔄 Refresh", use_container_width=True, key="refresh_linked_master"):
-                        with st.spinner("Refresh ho raha hai..."):
+                        with st.spinner("Refreshing Client Master..."):
                             m_df, m_name, m_err = fetch_linked_client_master(st.session_state.client_master_url, st.session_state.client_master_tab)
                             st.session_state.linked_master_df, st.session_state.client_master_sheet_name, st.session_state.linked_master_error = m_df, m_name, m_err
                         st.rerun()
                 with mc2:
                     if st.button("🔓 Unlink", use_container_width=True, key="unlink_client_master"):
-                        with st.spinner("Unlink ho raha hai..."):
+                        with st.spinner("Unlinking Client Master..."):
                             u_res = save_user_sheet_settings(st.session_state.user_id, client_master_url="", client_master_tab="")
                         if u_res.get("success"):
                             st.session_state.client_master_url = st.session_state.client_master_tab = st.session_state.client_master_sheet_name = st.session_state.linked_master_error = ""
                             st.session_state.linked_master_df = None
                             st.rerun()
                         else:
-                            st.error(u_res.get("message", "Unlink nahi ho paya."))
+                            st.error(u_res.get("message", "Failed to unlink Client Master."))
                 if st.session_state.client_master_url.startswith("http"):
                     st.link_button("🔗 Open Client Master", st.session_state.client_master_url, use_container_width=True)
             else:
@@ -241,9 +251,9 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                     if st.button("🔗 Link Master Sheet", type="primary", use_container_width=True):
                         clean_cm_url, clean_cm_tab = cm_url_inp.strip(), cm_tab_inp.strip()
                         if not clean_cm_url:
-                            st.warning("Client Master link dalein.")
+                            st.warning("Please enter the Client Master sheet link.")
                         else:
-                            with st.spinner("Verify & link ho raha hai..."):
+                            with st.spinner("Verifying and linking Client Master..."):
                                 m_df, m_name, m_err = fetch_linked_client_master(clean_cm_url, clean_cm_tab)
                                 if m_err:
                                     st.error(m_err)
@@ -253,14 +263,14 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                                         st.session_state.client_master_url, st.session_state.client_master_tab, st.session_state.client_master_sheet_name, st.session_state.linked_master_df, st.session_state.linked_master_error = clean_cm_url, clean_cm_tab, m_name, m_df, ""
                                         st.rerun()
                                     else:
-                                        st.error(s_res.get("message", "Save nahi ho paya."))
+                                        st.error(s_res.get("message", "Failed to save link."))
                 with cm_tab2:
                     manual_master_file = st.file_uploader("Upload Master (.xlsx / .csv)", type=["xlsx", "csv"], key="client_master_uploader")
 
         # 4. ACCOUNTS MASTER PANEL (HEALTH / MOTOR / SME)
         acc_linked_cnt = sum(bool(st.session_state[f"{ck}_accounts_url"]) for ck in ("health", "motor", "sme"))
         with st.expander(f"🏦 Accounts Master ({f'✅ {acc_linked_cnt}/3 Linked' if acc_linked_cnt else '⚪ Not Linked'})", expanded=False):
-            st.caption("Health, Motor aur SME teeno ke liye alag-alag Accounts Master sheet (`Company Name`, `Agency`, `Accounts`) link karein.")
+            st.caption("Link separate Accounts Master sheets (`Company Name`, `Agency`, `Accounts`) for Health, Motor, and SME.")
             for tab_ui, (cat_label, ck) in zip(st.tabs(["🏥 Health", "🚗 Motor", "🏢 SME"]), [("Health", "health"), ("Motor", "motor"), ("SME", "sme")]):
                 with tab_ui:
                     u_key, t_key, n_key, d_key, e_key = f"{ck}_accounts_url", f"{ck}_accounts_tab", f"{ck}_accounts_name", f"{ck}_accounts_df", f"{ck}_accounts_error"
@@ -274,20 +284,20 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                         ac1, ac2 = st.columns(2)
                         with ac1:
                             if st.button("🔄 Refresh", use_container_width=True, key=f"refresh_acc_{ck}"):
-                                with st.spinner(f"{cat_label} Accounts refresh ho raha hai..."):
+                                with st.spinner(f"Refreshing {cat_label} Accounts..."):
                                     a_df, a_name, a_err = fetch_linked_accounts_master(curr_url, st.session_state[t_key])
                                     st.session_state[d_key], st.session_state[n_key], st.session_state[e_key] = a_df, a_name, a_err
                                 st.rerun()
                         with ac2:
                             if st.button("🔓 Unlink", use_container_width=True, key=f"unlink_acc_{ck}"):
-                                with st.spinner("Unlink ho raha hai..."):
+                                with st.spinner("Unlinking..."):
                                     u_res = save_user_sheet_settings(st.session_state.user_id, **{u_key: "", t_key: ""})
                                 if u_res.get("success"):
                                     st.session_state[u_key] = st.session_state[t_key] = st.session_state[n_key] = st.session_state[e_key] = ""
                                     st.session_state[d_key] = None
                                     st.rerun()
                                 else:
-                                    st.error(u_res.get("message", "Unlink nahi ho paya."))
+                                    st.error(u_res.get("message", "Failed to unlink."))
                         if curr_url.startswith("http"):
                             st.link_button(f"🔗 Open {cat_label} Accounts", curr_url, use_container_width=True)
                     else:
@@ -298,9 +308,9 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                             if st.button(f"🔗 Link {cat_label} Accounts", type="primary", use_container_width=True, key=f"btn_link_acc_{ck}"):
                                 clean_au, clean_at = a_url_inp.strip(), a_tab_inp.strip()
                                 if not clean_au:
-                                    st.warning(f"{cat_label} Accounts Master link dalein.")
+                                    st.warning(f"Please enter the {cat_label} Accounts Master link.")
                                 else:
-                                    with st.spinner(f"{cat_label} Accounts Master verify & link ho raha hai..."):
+                                    with st.spinner(f"Verifying and linking {cat_label} Accounts Master..."):
                                         a_df, a_name, a_err = fetch_linked_accounts_master(clean_au, clean_at)
                                         if a_err:
                                             st.error(a_err)
@@ -310,37 +320,37 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                                                 st.session_state[u_key], st.session_state[t_key], st.session_state[n_key], st.session_state[d_key], st.session_state[e_key] = clean_au, clean_at, a_name, a_df, ""
                                                 st.rerun()
                                             else:
-                                                st.error(s_res.get("message", "Save nahi ho paya."))
+                                                st.error(s_res.get("message", "Failed to save link."))
                         with src_t2:
                             manual_acc_files[ck] = st.file_uploader(f"Upload {cat_label} Accounts (.xlsx / .csv)", type=["xlsx", "csv"], key=f"upload_acc_{ck}")
 
         # 5. RENEWAL LIST PANEL (HEALTH / MOTOR / SME)
         _render_category_folder_panel(
             title="🔄 Renewal List",
-            caption="Health, Motor aur SME ka Renewal List PDF folder (`GIC RENEWALS/HEALTH` ya `2026`) link karein.  \nMatch hone par `PYP premium` auto-fill hoga aur `OUR RENEWAL` = `YES` (warna `NO`).",
+            caption="Link separate Renewal List PDF folders (`GIC RENEWALS/HEALTH` or `2026`).  \nMatched policies auto-fill `PYP premium` and set `OUR RENEWAL` = `YES` (else `NO`).",
             folder_specs=[
                 ("Health", "health_renewal_folder_url", "health_renewal_folder_name"),
                 ("Motor", "motor_renewal_folder_url", "motor_renewal_folder_name"),
                 ("SME", "sme_renewal_folder_url", "sme_renewal_folder_name"),
             ],
             expanded=False,
-            footer_tip="💡 Main category folder (`HEALTH`) link karne par har saal (`2026`, `2027`...) auto-detect hoga.",
+            footer_tip="💡 Linking the main category folder (e.g. `HEALTH`) auto-detects year subfolders (`2026`, `2027`...).",
         )
 
         # 6. CUSTOM SHEET COLUMNS PANEL
         col_badge = f"Custom: {len(active_headers)}" if is_custom_cols else f"Default: {len(OUTPUT_COLUMNS)}"
         with st.expander(f"🛠️ Sheet Columns ({col_badge})", expanded=False):
             st.caption(
-                "Har line me 1 column likhein (exact order me).  \n"
+                "Enter one column per line in exact order.  \n"
                 "• Auto-fill fields: Client Name, Policy Number, Occupation, Accounts, PYP premium, etc.  \n"
-                "• Manual/Blank column: Bas naam likh dein (e.g. `Mail`, `Print`, `Folder`)  \n"
-                "• Header rename: `Client Name => Insured Name`"
+                "• Blank/Manual column: Enter any custom column name (e.g. `Mail`, `Print`, `Folder`)  \n"
+                "• Rename header: `Client Name => Insured Name`"
             )
             import_src_url = st.session_state.mode3_excel_url if is_mode3 else st.session_state.fixed_sheet_url
             import_src_tab = st.session_state.mode3_excel_tab if is_mode3 else st.session_state.fixed_sheet_tab
             if is_direct_sheet and mode2_target_type == "google_sheet" and import_src_url:
-                if st.button("📥 Linked Sheet/Excel se Headers Import Karein", use_container_width=True, key="import_sheet_hdrs"):
-                    with st.spinner("Row 1 headers padh rahe hain..."):
+                if st.button("📥 Import Headers from Linked Sheet/Excel", use_container_width=True, key="import_sheet_hdrs"):
+                    with st.spinner("Reading Row 1 headers..."):
                         imp_hdrs, imp_err = fetch_headers_from_drive_target(import_src_url, import_src_tab)
                     if imp_hdrs:
                         imported_spec = normalize_custom_columns_spec("\n".join(imp_hdrs))
@@ -350,43 +360,43 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                             st.session_state.col_editor_key += 1
                             st.rerun()
                         else:
-                            st.error(s_res.get("message", "Save nahi ho paya."))
+                            st.error(s_res.get("message", "Failed to save columns."))
                     else:
-                        st.warning(imp_err or "Row 1 khali hai — neeche manually columns paste karke Save karein.")
+                        st.warning(imp_err or "Row 1 is empty — paste your columns manually below and click Save.")
 
-            cols_text = st.text_area("Apne Columns (1 per line)", value=spec_to_multiline(st.session_state.health_custom_columns), height=240, key=f"custom_cols_textarea_{st.session_state.col_editor_key}")
+            cols_text = st.text_area("Custom Columns (1 per line)", value=spec_to_multiline(st.session_state.health_custom_columns), height=240, key=f"custom_cols_textarea_{st.session_state.col_editor_key}")
             cc1, cc2 = st.columns(2)
             with cc1:
                 if st.button("💾 Save", type="primary", use_container_width=True, key="save_custom_cols"):
                     norm_spec = normalize_custom_columns_spec(cols_text)
-                    with st.spinner("Columns save ho rahe hain..."):
+                    with st.spinner("Saving column layout..."):
                         s_res = save_user_sheet_settings(st.session_state.user_id, health_custom_columns=norm_spec)
                     if s_res.get("success"):
                         st.session_state.health_custom_columns = norm_spec
                         st.session_state.col_editor_key += 1
                         st.rerun()
                     else:
-                        st.error(s_res.get("message", "Save nahi ho paya."))
+                        st.error(s_res.get("message", "Failed to save columns."))
             with cc2:
                 if st.button("🔄 Reset", use_container_width=True, key="reset_custom_cols"):
-                    with st.spinner("Default columns reset ho rahe hain..."):
+                    with st.spinner("Resetting to default columns..."):
                         s_res = save_user_sheet_settings(st.session_state.user_id, health_custom_columns="")
                     if s_res.get("success"):
                         st.session_state.health_custom_columns = ""
                         st.session_state.col_editor_key += 1
                         st.rerun()
                     else:
-                        st.error(s_res.get("message", "Reset nahi ho paya."))
+                        st.error(s_res.get("message", "Failed to reset columns."))
             with st.popover("📋 Available Auto-Fill Fields", use_container_width=True):
                 st.write(", ".join(ALL_SYSTEM_FIELDS))
 
         st.divider()
         st.download_button("📋 Sample Client Master", data=build_sample_master_bytes(), file_name="Sample_Client_Master.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         st.download_button("🏦 Sample Accounts Master", data=build_sample_accounts_master_bytes(), file_name="Sample_Accounts_Master.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        if st.button("🚪 Logout", use_container_width=True):
+        if st.button("🚪 Sign Out", use_container_width=True):
             was_google = st.session_state.auth_method == "google"
             for k, v in DEFAULTS.items():
-                st.session_state[k] = v
+                st.session_state[k] = v.copy() if isinstance(v, (dict, list)) else v
             st.session_state.pop("last_results", None)
             if was_google and google_configured:
                 st.logout()
