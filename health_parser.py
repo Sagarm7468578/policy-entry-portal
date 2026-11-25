@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from health_parsers import COMPANY_PARSERS
+from health_parsers.plans import dispatch_plan_parser
 from health_parsers.common import (
     IST,
     OUTPUT_COLUMNS,
@@ -67,15 +68,17 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
         debug_info["company_scores"] = scores
         debug_info["detected_company"] = company
 
-        parser_fn = COMPANY_PARSERS.get(company)
-        if not company or not parser_fn:
-            base_row["Client Name"] = file_name
-            base_row["Company Name"] = company or "UNKNOWN"
-            debug_info["client_name"] = file_name
-            debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
-            return base_row, False, debug_info["error_reason"], debug_info
+        extracted = dispatch_plan_parser(company, pdf_text) if company else None
+        if extracted is None:
+            parser_fn = COMPANY_PARSERS.get(company)
+            if not company or not parser_fn:
+                base_row["Client Name"] = file_name
+                base_row["Company Name"] = company or "UNKNOWN"
+                debug_info["client_name"] = file_name
+                debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
+                return base_row, False, debug_info["error_reason"], debug_info
+            extracted = parser_fn(pdf_text)
 
-        extracted = parser_fn(pdf_text)
         if not extracted.get("client_name") and not extracted.get("policy_number"):
             base_row["Client Name"] = file_name
             base_row["Company Name"] = company
@@ -94,7 +97,10 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
 
         agency = extracted.get("agency") or extract_generic_agency(pdf_text)
         premium_mode = extracted.get("premium_mode") or extract_premium_mode(pdf_text)
-        dob = extracted.get("dob") or extract_oldest_dob(pdf_text, extracted.get("start_dt"))
+        if extracted.get("skip_dob_fallback"):
+            dob = extracted.get("dob", "")
+        else:
+            dob = extracted.get("dob") or extract_oldest_dob(pdf_text, extracted.get("start_dt"))
         accounts_val = lookup_accounts_master(company, agency, accounts_df)
 
         base_row.update({
