@@ -1,6 +1,6 @@
+import importlib
+import sys
 from datetime import datetime, timedelta
-from health_parsers import COMPANY_PARSERS
-from health_parsers.plans import dispatch_plan_parser
 from health_parsers.common import (
     IST,
     OUTPUT_COLUMNS,
@@ -34,6 +34,25 @@ from health_parsers.schema_excel import (
     append_rows_to_local_excel,
 )
 
+_CORE_SUBMODULES = {
+    "health_parsers.common",
+    "health_parsers.masters_renewal",
+    "health_parsers.schema_excel",
+}
+
+
+def _load_fresh_parsers():
+    """Reloads company & plan parsers from disk automatically so GitHub commits work WITHOUT Reboot."""
+    importlib.invalidate_caches()
+    for mod_name in list(sys.modules.keys()):
+        if mod_name == "health_parsers" or (
+            mod_name.startswith("health_parsers.") and mod_name not in _CORE_SUBMODULES
+        ):
+            del sys.modules[mod_name]
+    hp_pkg = importlib.import_module("health_parsers")
+    plans_pkg = importlib.import_module("health_parsers.plans")
+    return hp_pkg.COMPANY_PARSERS, plans_pkg.dispatch_plan_parser
+
 
 def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, accounts_df=None):
     """Returns (row_dict, is_success, error_reason, debug_info)"""
@@ -54,6 +73,8 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
     }
 
     try:
+        company_parsers, dispatch_plan_parser = _load_fresh_parsers()
+
         pdf_text = extract_pdf_text(pdf_bytes)
         debug_info["raw_text"] = pdf_text
 
@@ -70,7 +91,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
 
         extracted = dispatch_plan_parser(company, pdf_text) if company else None
         if extracted is None:
-            parser_fn = COMPANY_PARSERS.get(company)
+            parser_fn = company_parsers.get(company)
             if not company or not parser_fn:
                 base_row["Client Name"] = file_name
                 base_row["Company Name"] = company or "UNKNOWN"
