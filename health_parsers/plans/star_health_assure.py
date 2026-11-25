@@ -23,51 +23,73 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
         pdf_text,
     )
     block = m_block.group(1) if m_block else ""
+    if not block:
+        return ""
 
-    if block:
-        # Priority 1: Salutation-prefixed name on a single line (e.g. Mr.CHAYAN LADDHA, Mrs. SONAL LADDHA)
-        m_sal = re.search(
-            r"(?im)^[ \t]*(?:MRS|MISS|MR|MS|DR|SMT|SHRI|M/S)(?:\.[ \t]*|[ \t]+)([A-Za-z][A-Za-z .&/\-]{2,60})[ \t]*$",
-            block,
+    stop_words = {
+        "intermediary", "code", "renewal", "year", "collection", "date", "inception",
+        "first", "policy", "name", "optional", "cover", "loading", "discount",
+        "premium", "phone", "no", "cgst", "sgst", "igst", "stamp", "duty", "total", "rs",
+        "e-mail", "email", "mail", "id", "tenth", "ninth", "eighth", "seventh", "sixth",
+        "fifth", "fourth", "third", "second", "fresh", "new",
+    }
+
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in block.splitlines()]
+
+    def collect_continuation(start_idx: int) -> list:
+        extra = []
+        for j in range(start_idx + 1, min(start_idx + 3, len(lines))):
+            nxt = lines[j].strip(" :.-_")
+            if not nxt or re.search(r"[\d@/]", nxt):
+                break
+            nxt_words = [w.lower() for w in re.findall(r"[A-Za-z]+", nxt)]
+            if not nxt_words or any(w in stop_words for w in nxt_words):
+                break
+            if re.fullmatch(r"[A-Za-z .&\-]{2,45}", nxt):
+                extra.append(nxt)
+            else:
+                break
+        return extra
+
+    # Priority 1: Salutation-prefixed name (supports 1-line "Mr.CHAYAN LADDHA" & 2-line "Mr.SUMIT\nMAHESHWARI")
+    for idx, ln in enumerate(lines):
+        m_sal = re.match(
+            r"(?i)^:?\s*(?:MRS|MISS|MR|MS|DR|SMT|SHRI|M/S)(?:\.[ \t]*|[ \t]+)([A-Za-z][A-Za-z .&/\-]{1,60})$",
+            ln,
         )
         if m_sal:
-            val = clean_person_name(m_sal.group(1))
+            parts = [m_sal.group(1).strip()] + collect_continuation(idx)
+            val = clean_person_name(" ".join(parts))
             if val:
                 return val
 
-        # Priority 2: Direct "Intermediary Name : ..." or "Agent Name : ..."
-        m_direct = re.search(
-            r"(?i)(?:Intermediary\s*Name|Agent\s*Name)[ \t]*[:\-][ \t]*([^\r\n]{3,65})",
-            block,
-        )
-        if m_direct:
-            cand = clean_person_name(m_direct.group(1))
-            if cand and not re.search(r"(?i)indicated\s+by\s+you", cand):
-                return cand
+    # Priority 2: Direct "Intermediary Name : ..." or "Agent Name : ..."
+    m_direct = re.search(
+        r"(?i)(?:Intermediary\s*Name|Agent\s*Name)[ \t]*[:\-][ \t]*([^\r\n]{3,65})",
+        block,
+    )
+    if m_direct:
+        cand = clean_person_name(m_direct.group(1))
+        if cand and not re.search(r"(?i)indicated\s+by\s+you", cand):
+            return cand
 
-        # Priority 3: Clean alphabetic name line inside block (without salutation)
-        skip_words = {
-            "intermediary", "code", "renewal", "year", "collection", "date", "inception",
-            "first", "policy", "name", "optional", "cover", "loading", "discount",
-            "premium", "phone", "no", "cgst", "sgst", "igst", "stamp", "duty", "total", "rs",
-            "e-mail", "email", "mail", "id", "tenth", "ninth", "eighth", "seventh", "sixth",
-            "fifth", "fourth", "third", "second", "fresh", "new",
-        }
-        for line in block.splitlines():
-            s = re.sub(r"[ \t]+", " ", line).strip(" :.-_")
-            if len(s) < 3 or re.search(r"[\d@/]", s):
-                continue
-            low_words = [w.lower() for w in re.findall(r"[A-Za-z]+", s)]
-            if not low_words or any(w in skip_words for w in low_words):
-                continue
-            if re.fullmatch(r"[A-Za-z .&\-]{3,60}", s):
-                return clean_person_name(s)
+    # Priority 3: Clean alphabetic name line(s) inside block (without salutation)
+    for idx, ln in enumerate(lines):
+        s = ln.strip(" :.-_")
+        if len(s) < 3 or re.search(r"[\d@/]", s):
+            continue
+        low_words = [w.lower() for w in re.findall(r"[A-Za-z]+", s)]
+        if not low_words or any(w in stop_words for w in low_words):
+            continue
+        if re.fullmatch(r"[A-Za-z .&\-]{3,60}", s):
+            parts = [s] + collect_continuation(idx)
+            return clean_person_name(" ".join(parts))
 
     return ""
 
 
 def _extract_star_assure_payment_mode(pdf_text: str) -> str:
-    # Star Health Section 80D certificate: "Payment received by Cheque / Online / Cash ..."
+    # Star Health Section 80D certificate: "Payment received by Cheque / Payment Gateway / Online / Cash ..."
     m_rec = re.search(r"(?i)Payment\s+received\s+by\s+([^\r\n]{2,60})", pdf_text)
     if m_rec:
         seg = m_rec.group(1)
