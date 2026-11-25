@@ -41,7 +41,7 @@ def _render_status_bar(ctx, active_headers, is_custom_cols):
         else:
             ps_status = f"✅ `{st.session_state.fixed_sheet_name or st.session_state.fixed_sheet_tab}`" if st.session_state.fixed_sheet_url else "⚠️ Not Linked"
     else:
-        ps_label, ps_status = "Policy Sheet", "☁️ Mode 1 Cloud Sheet"
+        ps_label, ps_status = "Policy Sheet", "☁️ Cloud Master Sheet"
 
     manual_master = ctx["manual_master_file"]
     cm_status = (f"✅ {ctx['m_count']} Clients" if not st.session_state.linked_master_error else "⚠️ Link Error") if st.session_state.client_master_url else (f"📄 `{manual_master.name}`" if manual_master else "⚪ Not Linked")
@@ -61,19 +61,82 @@ def _render_status_bar(ctx, active_headers, is_custom_cols):
     st.caption(f"**Mode:** {mode_short}{folder_part}  |  **{ps_label}:** {ps_status}  |  **Client Master:** {cm_status}  |  **Accounts:** {acc_status}  |  **Renewal List:** {rn_status}  |  **Format:** {cols_status}")
 
 
-def _render_mode3_workspace(ctx):
+def _render_quick_pdf_inspector(all_drive_files, ctx, active_headers):
+    """Admin-only instant PDF text & dry-run parser inspector — works directly from Drive list without saving any entry."""
+    if not (is_admin_user() and all_drive_files):
+        return
+
+    with st.expander("🔍 Quick PDF Text & Bugging Inspector (No Entry Required)", expanded=False):
+        st.caption("Select any PDF from this folder to instantly copy its raw text and run a live Dry-Run extraction test without saving to Excel.")
+        options = ["-- Select a PDF to inspect --"] + [f"{i + 1}. {f['name']}" for i, f in enumerate(all_drive_files)]
+        picked_idx = st.selectbox(
+            "Select PDF for Bugging",
+            options=range(len(options)),
+            format_func=lambda i: options[i],
+            key="quick_inspect_pdf_selector",
+        )
+
+        if picked_idx == 0:
+            return
+
+        f_meta = all_drive_files[picked_idx - 1]
+        fid, fname = f_meta["id"], f_meta["name"]
+        cache = st.session_state.quick_pdf_bytes_cache
+
+        if fid not in cache:
+            with st.spinner(f"Fetching PDF text for {fname}..."):
+                dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
+            if not dl_res.get("success") or not dl_res.get("content_b64"):
+                st.error(dl_res.get("message", "Could not download PDF from Google Drive."))
+                return
+            cache[fid] = base64.b64decode(dl_res["content_b64"])
+
+        pdf_bytes = cache[fid]
+        master_df = get_active_master_df(ctx["manual_master_file"])
+        accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
+
+        c_btn1, c_btn2 = st.columns([1, 3])
+        with c_btn1:
+            st.button("🔄 Re-Test Live Parser", key=f"retest_quick_{fid}", use_container_width=True)
+
+        row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
+        projected, _ = project_rows_to_schema([row_dict], st.session_state.health_custom_columns)
+
+        st.write(
+            f"**File:** `{fname}`  |  **Detected Company:** `{debug_info['detected_company'] or 'None'}`  |  "
+            f"**Status:** {'✅ Parsed' if is_ok else '❌ Error'}"
+        )
+        if err_msg:
+            st.error(f"Error Reason: {err_msg}")
+
+        st.markdown("**Live Dry-Run Preview (Not Saved to Excel):**")
+        st.dataframe(pd.DataFrame(projected, columns=active_headers), use_container_width=True, hide_index=True)
+
+        raw_txt = debug_info.get("raw_text") or ""
+        st.download_button(
+            "📄 Download Raw PDF Text (.txt)",
+            data=raw_txt.encode("utf-8"),
+            file_name=f"DEBUG_{fname}.txt",
+            mime="text/plain",
+            key=f"quick_dl_txt_{fid}",
+        )
+        with st.expander("📋 Click to Copy PDF Text", expanded=True):
+            st.code(raw_txt, language=None)
+
+
+def _render_mode3_workspace(ctx, active_headers):
     active_folder_url = st.session_state.health_folder_url
     active_m3_excel_url = st.session_state.mode3_excel_url
 
     if not active_m3_excel_url:
-        st.warning("📊 Pehle Left Sidebar → **📊 Mode 3 Drive Excel** me apni Google Drive wali `.xlsx` Excel file ka Share Link 1 baar save karein.")
+        st.warning("📊 Please link your Google Drive `.xlsx` Excel file first via **Left Sidebar → Mode 3 Drive Excel**.")
     if not active_folder_url:
-        st.warning("📁 PDF auto-scan ke liye Left Sidebar → **📁 Drive Auto-Folders → 🏥 Health** me apna **`MEDICLAIM`** main folder (ya direct `NOVEMBER 2026` folder) link karein.")
+        st.warning("📁 Please link your **`MEDICLAIM`** parent folder (or direct month folder) via **Left Sidebar → Drive Auto-Folders → Health**.")
         return
 
     desired_scan_key = f"{active_folder_url}||{st.session_state.drive_selected_year}||{st.session_state.drive_selected_month}"
     if st.session_state.drive_scan_info is None or st.session_state.drive_last_scan_key != desired_scan_key:
-        with st.spinner("Google Drive folder scan ho raha hai..."):
+        with st.spinner("Scanning Google Drive folder..."):
             info, f_err = scan_drive_folder_pdfs(st.session_state.user_id, active_folder_url, st.session_state.drive_selected_year, st.session_state.drive_selected_month)
             st.session_state.drive_scan_info, st.session_state.drive_scan_error = info, f_err
             if info:
@@ -106,7 +169,7 @@ def _render_mode3_workspace(ctx):
                 chosen_mo = st.selectbox("📆 Month Folder", avail_months, index=mo_idx, key="sb_drive_month")
             else:
                 chosen_mo = ""
-                st.caption("Is year folder me koi month subfolder nahi mila.")
+                st.caption("No month subfolders found inside this year folder.")
 
         if chosen_yr != info.get("selected_year", ""):
             st.session_state.drive_selected_year, st.session_state.drive_selected_month, st.session_state.drive_scan_info = chosen_yr, "", None
@@ -124,19 +187,22 @@ def _render_mode3_workspace(ctx):
     already_done_files = [f for f in all_drive_files if f.get("last_status") == "DONE"]
 
     if not all_drive_files:
-        st.info("✅ Is folder me abhi koi PDF file nahi hai. Nayi Health PDFs folder me dalein aur **🔄 Scan Folder** dabayein.")
+        st.info("✅ No PDF files found in this folder. Add Health Policy PDFs and click **Scan Folder**.")
         return
+
+    # Admin-only Quick PDF Text Inspector (works immediately without running Entry Process)
+    _render_quick_pdf_inspector(all_drive_files, ctx, active_headers)
 
     include_done = True
     if already_done_files:
-        st.success(f"📄 Total Folder PDFs: **{len(all_drive_files)}**  |  🆕 New / Pending: **{len(new_or_retry_files)}**  |  ✅ Already Entered (Safe in Folder): **{len(already_done_files)}**")
-        include_done = st.checkbox(f"Already-entered ({len(already_done_files)}) PDFs ko bhi dobara process karein", value=True, key="include_done_m3")
+        st.success(f"📄 Total PDFs: **{len(all_drive_files)}**  |  🆕 Pending: **{len(new_or_retry_files)}**  |  ✅ Previously Entered: **{len(already_done_files)}**")
+        include_done = st.checkbox(f"Include previously entered PDFs ({len(already_done_files)}) for reprocessing", value=True, key="include_done_m3")
     else:
-        st.success(f"📄 **{len(new_or_retry_files)} Pending PDFs** ready hain (Original PDFs apni jagah safe rahengi!)")
+        st.success(f"📄 **{len(new_or_retry_files)} Pending PDFs** ready for processing (original files remain untouched)")
 
     candidate_files = all_drive_files if include_done else new_or_retry_files
     if not candidate_files:
-        st.info("🎉 Is folder ki saari PDFs pehle hi enter ho chuki hain! Nayi PDF aane par bas **🔄 Scan Folder** dabayein.")
+        st.info("🎉 All PDFs in this folder have already been entered. Add new PDFs and click **Scan Folder**.")
         return
 
     list_sig = f"{info.get('active_folder_id', '')}|{include_done}|{','.join(f['id'] for f in candidate_files)}"
@@ -146,8 +212,8 @@ def _render_mode3_workspace(ctx):
         st.session_state.m3_select_all_cb = True
         st.session_state.drive_pdf_sel_ver += 1
 
-    with st.expander(f"📋 Folder ki PDFs Select Karein ({len(candidate_files)} available)", expanded=True):
-        st.checkbox("☑️ Select All PDFs (Tick = Sab Select | Untick = Sab Unselect)", key="m3_select_all_cb", on_change=_on_select_all_pdfs_change)
+    with st.expander(f"📋 Select Policy PDFs ({len(candidate_files)} available)", expanded=True):
+        st.checkbox("☑️ Select All PDFs (Checked = Select All | Unchecked = Clear All)", key="m3_select_all_cb", on_change=_on_select_all_pdfs_change)
         df_selectable = pd.DataFrame([
             {
                 "Select": st.session_state.drive_pdf_sel_default, "#": i + 1, "File Name": f["name"],
@@ -167,13 +233,13 @@ def _render_mode3_workspace(ctx):
 
     opt1, opt2 = st.columns(2)
     with opt1:
-        skip_duplicates_m3 = st.checkbox("Duplicate Policy auto-skip karein", value=False, key="skip_dup_m3")
+        skip_duplicates_m3 = st.checkbox("Auto-skip duplicate policies", value=False, key="skip_dup_m3")
     with opt2:
-        copy_errors_drive = st.checkbox("Error PDFs ki COPY `Error/` folder me bhejein (Original wahi rahegi, Done move nahi hogi)", value=True, key="copy_err_m3")
+        copy_errors_drive = st.checkbox("Copy failed PDFs to `Error/` folder (originals stay untouched)", value=True, key="copy_err_m3")
 
-    if st.button(f"🚀 Process {len(target_files)} Selected PDFs & Direct Save in Drive Excel (.xlsx)", type="primary", use_container_width=True, disabled=(len(target_files) == 0), key="start_mode3_btn"):
+    if st.button(f"🚀 Process {len(target_files)} Selected PDFs & Save to Drive Excel (.xlsx)", type="primary", use_container_width=True, disabled=(len(target_files) == 0), key="start_mode3_btn"):
         if not active_m3_excel_url:
-            st.warning("Mode 3 ke liye pehle Left Sidebar → **📊 Mode 3 Drive Excel** me apni Google Drive `.xlsx` file link karein.")
+            st.warning("Please link your Google Drive `.xlsx` file first via **Left Sidebar → Mode 3 Drive Excel**.")
             return
         master_df = get_active_master_df(ctx["manual_master_file"])
         accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
@@ -183,10 +249,10 @@ def _render_mode3_workspace(ctx):
         progress, status_text = st.progress(0), st.empty()
         for idx, f_meta in enumerate(target_files):
             fname, fid = f_meta["name"], f_meta["id"]
-            status_text.text(f"Drive se read ho raha hai ({idx + 1}/{len(target_files)}): {fname}")
+            status_text.text(f"Reading from Drive ({idx + 1}/{len(target_files)}): {fname}")
             dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
             if not dl_res.get("success") or not dl_res.get("content_b64"):
-                err_reason = dl_res.get("message", "Drive se PDF download nahi ho payi")
+                err_reason = dl_res.get("message", "Could not download PDF from Google Drive.")
                 error_details.append({"File Name": fname, "Reason": err_reason})
                 error_track_items.append({"id": fid, "name": fname})
                 debug_list.append({"file_name": fname, "client_name": fname, "detected_company": "", "company_scores": {}, "raw_text": "", "error_reason": err_reason})
@@ -194,6 +260,7 @@ def _render_mode3_workspace(ctx):
                 continue
 
             pdf_bytes = base64.b64decode(dl_res["content_b64"])
+            st.session_state.quick_pdf_bytes_cache[fid] = pdf_bytes
             row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
             debug_list.append(debug_info)
             extracted_rows.append(row_dict)
@@ -210,10 +277,10 @@ def _render_mode3_workspace(ctx):
         progress.empty()
 
         if st.session_state.health_renewal_folder_url and extracted_rows:
-            with st.spinner("Renewal List PDFs se PYP premium & OUR RENEWAL check ho raha hai..."):
+            with st.spinner("Matching Renewal List PDFs for PYP Premium & Renewal Status..."):
                 apply_renewal_list_lookup(extracted_rows, st.session_state.health_renewal_folder_url)
 
-        with st.spinner("Drive status update & Error PDFs ki copy bana rahe hain..."):
+        with st.spinner("Updating Drive tracking status..."):
             call_backend({
                 "action": "finalize_drive_batch", "user_id": st.session_state.user_id,
                 "target_folder_id": info.get("active_folder_id", ""), "folder_url": active_folder_url,
@@ -235,23 +302,23 @@ def _render_upload_workspace(ctx):
     is_mode2, mode2_target_type = ctx["is_mode2"], ctx["mode2_target_type"]
     hdr1, hdr2 = st.columns([4, 1])
     with hdr1:
-        st.subheader("📤 Policy PDFs Upload Karein")
+        st.subheader("📤 Upload Policy PDFs")
     with hdr2:
         if st.button("🗑️ Clear All PDFs", use_container_width=True):
             st.session_state.pdf_uploader_key += 1
             st.rerun()
 
-    uploaded_pdfs = st.file_uploader("Ek ya ek se zyada Health Policy PDF select karein", type=["pdf"], accept_multiple_files=True, key=f"pdf_uploader_{st.session_state.pdf_uploader_key}", label_visibility="collapsed")
-    skip_duplicates = st.checkbox("Duplicate Policy auto-skip karein (Agar same Policy Number + Expiry Date pehle se sheet me saved ho)", value=False)
-    btn_label = "🚀 Start Policy Entry (Mode 2: Direct Fixed Sheet me Save Karein)" if is_mode2 else "🚀 Start Policy Entry (Mode 1: Cloud Portal)"
+    uploaded_pdfs = st.file_uploader("Select one or more Health Policy PDFs", type=["pdf"], accept_multiple_files=True, key=f"pdf_uploader_{st.session_state.pdf_uploader_key}", label_visibility="collapsed")
+    skip_duplicates = st.checkbox("Auto-skip duplicate policies (same Policy Number + Expiry Date)", value=False)
+    btn_label = "🚀 Start Policy Entry (Mode 2: Direct Save to Sheet)" if is_mode2 else "🚀 Start Policy Entry (Mode 1: Cloud Portal)"
 
     if st.button(btn_label, type="primary", use_container_width=True):
         if not uploaded_pdfs:
-            st.warning("Pehle kam se kam ek Policy PDF upload karein.")
+            st.warning("Please upload at least one Policy PDF.")
         elif is_mode2 and mode2_target_type == "google_sheet" and not st.session_state.fixed_sheet_url:
-            st.warning("Mode 2 ke liye pehle Left Sidebar se apni Policy Entry Google Sheet link karein.")
+            st.warning("Please link your Policy Entry Google Sheet via the Left Sidebar first.")
         elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
-            st.warning("Mode 2 ke liye pehle Left Sidebar se apni Fixed Local Excel (.xlsx) file ka path link karein.")
+            st.warning("Please link your Local Excel (.xlsx) file path via the Left Sidebar first.")
         else:
             master_df = get_active_master_df(ctx["manual_master_file"])
             accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
@@ -275,7 +342,7 @@ def _render_upload_workspace(ctx):
             progress.empty()
 
             if st.session_state.health_renewal_folder_url and extracted_rows:
-                with st.spinner("Renewal List PDFs se PYP premium & OUR RENEWAL check ho raha hai..."):
+                with st.spinner("Matching Renewal List PDFs for PYP Premium & Renewal Status..."):
                     apply_renewal_list_lookup(extracted_rows, st.session_state.health_renewal_folder_url)
 
             save_and_record_batch(
@@ -299,25 +366,25 @@ def _render_results_and_history(ctx, active_headers):
         elif res.get("save_msg"):
             st.success(res["save_msg"])
         if res.get("skipped_count", 0) > 0:
-            st.info(f"ℹ️ {res['skipped_count']} duplicate policy pehle se saved thi, isliye dobara add nahi ki gayi.")
+            st.info(f"ℹ️ Skipped {res['skipped_count']} duplicate policies already present in the sheet.")
 
-        st.subheader(f"⚡ Latest Round #{res['round_no']} [{res.get('mode_used', 'Mode 1')}] ({res['time_display']})")
+        st.subheader(f"⚡ Latest Batch #{res['round_no']} [{res.get('mode_used', 'Mode 1')}] ({res['time_display']})")
         m1, m2, m3 = st.columns(3)
-        m1.metric("Is Round ki PDFs", res["total_count"])
-        m2.metric("Done (YES) ✅", res["done_count"])
-        m3.metric("Error (Check Karein) ❌", res["error_count"])
+        m1.metric("Total PDFs", res["total_count"])
+        m2.metric("Completed ✅", res["done_count"])
+        m3.metric("Errors ❌", res["error_count"])
 
         if not is_mode3:
             z1, z2 = st.columns(2)
             with z1:
                 if res.get("round_excel_bytes"):
-                    st.download_button(f"📊 Round #{res['round_no']} Excel Copy", data=res["round_excel_bytes"], file_name=f"Round_{res['round_no']}_Health_Entries_{res['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"latest_xlsx_{res['round_no']}_{res['timestamp']}")
+                    st.download_button(f"📊 Download Batch #{res['round_no']} Excel", data=res["round_excel_bytes"], file_name=f"Batch_{res['round_no']}_Health_Entries_{res['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"latest_xlsx_{res['round_no']}_{res['timestamp']}")
             with z2:
                 if res["err_zip_bytes"]:
-                    st.download_button(f"⚠️ Round #{res['round_no']} Only Error PDFs (ZIP)", data=res["err_zip_bytes"], file_name=f"Round_{res['round_no']}_Error_Policies_{res['timestamp']}.zip", mime="application/zip", use_container_width=True, key=f"latest_err_{res['round_no']}_{res['timestamp']}")
+                    st.download_button(f"⚠️ Download Batch #{res['round_no']} Error PDFs (ZIP)", data=res["err_zip_bytes"], file_name=f"Batch_{res['round_no']}_Error_Policies_{res['timestamp']}.zip", mime="application/zip", use_container_width=True, key=f"latest_err_{res['round_no']}_{res['timestamp']}")
 
         if res["error_details"]:
-            st.warning("Neeche di gayi PDFs me problem aayi — inki copy `Error` folder me save kar di gayi hai (original files safe hain):")
+            st.warning("The following PDFs encountered extraction issues (a copy has been saved to the `Error/` folder; originals are safe):")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
         if is_direct_sheet and res.get("batch_rows"):
@@ -325,18 +392,18 @@ def _render_results_and_history(ctx, active_headers):
             st.dataframe(pd.DataFrame(res["batch_rows"], columns=res.get("batch_columns") or active_headers), use_container_width=True, hide_index=True)
 
     if not is_mode3 and st.session_state.batch_history:
-        with st.expander(f"🗂️ Last {len(st.session_state.batch_history)} Rounds Download History (Max {MAX_PDF_ROUNDS} Rounds)", expanded=(len(st.session_state.batch_history) > 1)):
-            st.caption("Purane rounds ki Error PDFs ya Excel copy yahan se kabhi bhi download kar sakte hain.")
+        with st.expander(f"🗂️ Last {len(st.session_state.batch_history)} Batches Download History (Max {MAX_PDF_ROUNDS})", expanded=(len(st.session_state.batch_history) > 1)):
+            st.caption("Download Excel copies or Error PDFs from recent batches.")
             for b in st.session_state.batch_history:
                 c_info, c_xlsx, c_err = st.columns([2.5, 1.5, 1.5])
                 with c_info:
-                    st.markdown(f"**Round #{b['round_no']} ({b.get('mode_used', 'Mode 1')})** — `{b['time_display']}`  \nTotal: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**")
+                    st.markdown(f"**Batch #{b['round_no']} ({b.get('mode_used', 'Mode 1')})** — `{b['time_display']}`  \nTotal: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**")
                 with c_xlsx:
                     if b.get("round_excel_bytes"):
-                        st.download_button(f"📊 Round #{b['round_no']} Excel", data=b["round_excel_bytes"], file_name=f"Round_{b['round_no']}_Health_Entries_{b['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"hist_xlsx_{b['round_no']}_{b['timestamp']}")
+                        st.download_button(f"📊 Batch #{b['round_no']} Excel", data=b["round_excel_bytes"], file_name=f"Batch_{b['round_no']}_Health_Entries_{b['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"hist_xlsx_{b['round_no']}_{b['timestamp']}")
                 with c_err:
                     if b["err_zip_bytes"]:
-                        st.download_button(f"⚠️ Round #{b['round_no']} Error (ZIP)", data=b["err_zip_bytes"], file_name=f"Round_{b['round_no']}_Error_Policies_{b['timestamp']}.zip", mime="application/zip", use_container_width=True, key=f"hist_err_{b['round_no']}_{b['timestamp']}")
+                        st.download_button(f"⚠️ Batch #{b['round_no']} Errors (ZIP)", data=b["err_zip_bytes"], file_name=f"Batch_{b['round_no']}_Error_Policies_{b['timestamp']}.zip", mime="application/zip", use_container_width=True, key=f"hist_err_{b['round_no']}_{b['timestamp']}")
                     else:
                         st.caption("No Error PDFs ✅")
                 st.divider()
@@ -346,10 +413,10 @@ def _render_results_and_history(ctx, active_headers):
         saved_rows = st.session_state.saved_health_rows or []
         sh1, sh2 = st.columns([3, 1])
         with sh1:
-            st.subheader(f"📊 POLICY ENTRY SHEET FOR HEALTH (Total Saved: {len(saved_rows)})")
+            st.subheader(f"📊 Health Policy Master Sheet (Total Saved: {len(saved_rows)})")
         with sh2:
-            if st.button("🔄 Refresh Saved Sheet", use_container_width=True):
-                with st.spinner("Refresh ho raha hai..."):
+            if st.button("🔄 Refresh Sheet", use_container_width=True):
+                with st.spinner("Refreshing saved sheet..."):
                     loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
                     st.session_state.saved_health_rows = loaded_rows
                     if load_err:
@@ -363,67 +430,71 @@ def _render_results_and_history(ctx, active_headers):
             st.download_button(f"📥 Download {DEFAULT_HEALTH_EXCEL_NAME} ({len(proj_saved)} Entries)", data=master_excel_bytes, file_name=DEFAULT_HEALTH_EXCEL_NAME, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", use_container_width=True)
             st.dataframe(pd.DataFrame(proj_saved, columns=saved_schema["headers"]), use_container_width=True, hide_index=True)
 
-            with st.expander("🗑️ Nayi Sheet Shuru Karein (Purani Saved Entries Clear Karein)"):
-                st.warning("Dhyan dein: Clear karne se pehle upar se apni Excel download karke save kar lein.")
-                confirm_clear = st.checkbox("Haan, mujhe apni saari saved Health entries clear karni hain.")
+            with st.expander("🗑️ Reset Cloud Sheet (Clear All Saved Entries)"):
+                st.warning("Please download a backup of your Excel file before clearing saved entries.")
+                confirm_clear = st.checkbox("I confirm I want to permanently clear all saved Health entries.")
                 if st.button("Clear Saved Health Sheet", disabled=not confirm_clear):
-                    with st.spinner("Clear ho raha hai..."):
+                    with st.spinner("Clearing saved entries..."):
                         clr_res = call_backend({"action": "clear_health_entries", "user_id": st.session_state.user_id})
                     if clr_res.get("success"):
                         st.session_state.saved_health_rows = []
                         st.session_state.pop("last_results", None)
-                        st.success("Sheet clear ho gayi! Ab aap fresh entries shuru kar sakte hain.")
+                        st.success("Cloud sheet cleared successfully.")
                         st.rerun()
                     else:
-                        st.error(clr_res.get("message", "Clear karne me error aaya."))
+                        st.error(clr_res.get("message", "Failed to clear saved sheet."))
         else:
-            st.info("Abhi aapki saved Health sheet khali hai. Pehli baar PDF upload karte hi saari entries yahan save hone lagengi.")
+            st.info("Your Cloud Health Sheet is currently empty. Upload PDFs above to start recording entries.")
 
 
 def _render_admin_debug():
     if not (is_admin_user() and st.session_state.batch_history):
         return
-    with st.expander("click for bugging"):
-        round_options = [f"Round #{b['round_no']} ({b['time_display']}) - {b['total_count']} PDFs" for b in st.session_state.batch_history]
-        selected_round_idx = st.selectbox("Round chunein:", options=range(len(round_options)), format_func=lambda i: round_options[i], key="debug_round_selector")
+    with st.expander("🐞 Batch Bugging Console (Processed Rounds)"):
+        round_options = [f"Batch #{b['round_no']} ({b['time_display']}) - {b['total_count']} PDFs" for b in st.session_state.batch_history]
+        selected_round_idx = st.selectbox("Select Batch:", options=range(len(round_options)), format_func=lambda i: round_options[i], key="debug_round_selector")
         chosen_batch = st.session_state.batch_history[selected_round_idx]
         debug_list = chosen_batch.get("debug_list", [])
         if debug_list:
             pdf_labels = [f"{idx + 1}. {d.get('client_name') or d['file_name']}  —  [{d['file_name']}]" for idx, d in enumerate(debug_list)]
-            selected_pdf_idx = st.selectbox("pls select pdf for bugging", options=range(len(pdf_labels)), format_func=lambda i: pdf_labels[i], key=f"debug_pdf_selector_{chosen_batch['round_no']}")
+            selected_pdf_idx = st.selectbox("Select PDF for Bugging", options=range(len(pdf_labels)), format_func=lambda i: pdf_labels[i], key=f"debug_pdf_selector_{chosen_batch['round_no']}")
             selected_debug = debug_list[selected_pdf_idx]
 
             st.write("**File Name:**", selected_debug["file_name"])
             st.write("**Detected Company:**", selected_debug["detected_company"] or "None")
-            st.write("**Company Keyword Count:**", selected_debug["company_scores"] or "No match")
+            st.write("**Company Keyword Score:**", selected_debug["company_scores"] or "No match")
             if selected_debug["error_reason"]:
                 st.error(f"Error Reason: {selected_debug['error_reason']}")
 
             raw_txt = selected_debug["raw_text"] or ""
-            st.download_button("📄 Download Full Raw Text (.txt)", data=raw_txt.encode("utf-8"), file_name=f"DEBUG_{selected_debug['file_name']}.txt", mime="text/plain", key=f"debug_dl_{chosen_batch['round_no']}_{selected_pdf_idx}")
-            st.text_area(f"Full Extracted PDF Text ({len(raw_txt)} characters) — Ctrl+A, Ctrl+C se copy karein:", value=raw_txt, height=380, key=f"debug_textarea_{chosen_batch['round_no']}_{selected_pdf_idx}_{selected_debug['file_name']}")
-            with st.expander("click for copy of pdf text"):
+            st.download_button("📄 Download Raw PDF Text (.txt)", data=raw_txt.encode("utf-8"), file_name=f"DEBUG_{selected_debug['file_name']}.txt", mime="text/plain", key=f"debug_dl_{chosen_batch['round_no']}_{selected_pdf_idx}")
+            st.text_area(f"Extracted PDF Text ({len(raw_txt)} characters):", value=raw_txt, height=380, key=f"debug_textarea_{chosen_batch['round_no']}_{selected_pdf_idx}_{selected_debug['file_name']}")
+            with st.expander("📋 Click to Copy PDF Text"):
                 st.code(raw_txt, language=None)
 
 
 def render_workspace(ctx, active_headers, is_custom_cols):
-    st.title("📄 Automatic Policy Entry Portal")
+    st.title("🛡️ Soft.SM Policy Mitra")
+    st.caption("All-in-One Insurance Advisor Automation Suite")
 
     if ctx["policy_category"] != "Health Insurance":
-        st.info(f"**{ctx['policy_category']}** abhi setup ho raha hai. Filhaal **Health Insurance** chunein (aap abhi se sidebar me Motor/SME Drive Folder, Accounts Master aur Renewal List link karke rakh sakte hain).")
+        st.info(
+            f"**{ctx['policy_category']}** module is under development. Please select **Health Insurance** to continue "
+            f"(you can already pre-link Motor/SME Drive Folders, Accounts Masters, and Renewal Lists in the sidebar)."
+        )
         st.stop()
 
     _render_status_bar(ctx, active_headers, is_custom_cols)
 
     if ctx["is_mode1"] and st.session_state.saved_health_rows is None:
-        with st.spinner("Aapki purani saved Health Sheet load ho rahi hai..."):
+        with st.spinner("Loading your saved Health Master Sheet..."):
             loaded_rows, load_err = load_saved_health_rows(st.session_state.user_id)
             st.session_state.saved_health_rows = loaded_rows
             if load_err:
-                st.warning(f"⚠️ Cloud sheet load notice: {load_err}")
+                st.warning(f"⚠️ Cloud sheet notice: {load_err}")
 
     if ctx["is_mode3"]:
-        _render_mode3_workspace(ctx)
+        _render_mode3_workspace(ctx, active_headers)
     else:
         _render_upload_workspace(ctx)
 
