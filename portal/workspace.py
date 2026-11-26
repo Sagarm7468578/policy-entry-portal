@@ -241,11 +241,7 @@ def _render_mode3_workspace(ctx, active_headers):
         target_files = [candidate_files[i] for i in edited_df.index[edited_df["Select"] == True].tolist()]
         st.caption(f"✅ Selected for Entry: **{len(target_files)} / {len(candidate_files)} PDFs**")
 
-    opt1, opt2 = st.columns(2)
-    with opt1:
-        skip_duplicates_m3 = st.checkbox("Auto-skip duplicate policies", value=False, key="skip_dup_m3")
-    with opt2:
-        copy_errors_drive = st.checkbox("Copy failed PDFs to `Error/` folder (originals stay untouched)", value=True, key="copy_err_m3")
+    skip_duplicates_m3 = st.checkbox("Auto-skip duplicate policies", value=False, key="skip_dup_m3")
 
     if st.button(f"🚀 Process {len(target_files)} Selected PDFs & Save to Drive Excel (.xlsx)", type="primary", use_container_width=True, disabled=(len(target_files) == 0), key="start_mode3_btn"):
         if not active_m3_excel_url:
@@ -302,7 +298,7 @@ def _render_mode3_workspace(ctx, active_headers):
                 "action": "finalize_drive_batch", "user_id": st.session_state.user_id,
                 "target_folder_id": info.get("active_folder_id", ""), "folder_url": active_folder_url,
                 "done_items": done_track_items, "error_items": error_track_items,
-                "copy_errors_to_folder": copy_errors_drive,
+                "copy_errors_to_folder": False,
             })
 
         save_and_record_batch(
@@ -408,7 +404,7 @@ def _render_results_and_history(ctx, active_headers):
                     st.download_button(f"⚠️ Download Batch #{res['round_no']} Error PDFs (ZIP)", data=res["err_zip_bytes"], file_name=f"Batch_{res['round_no']}_Error_Policies_{res['timestamp']}.zip", mime="application/zip", use_container_width=True, key=f"latest_err_{res['round_no']}_{res['timestamp']}")
 
         if res["error_details"]:
-            st.warning("The following PDFs encountered extraction issues (a copy has been saved to the `Error/` folder; originals are safe):")
+            st.warning("The following PDFs encountered extraction issues (review details below):")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
         if is_direct_sheet and res.get("batch_rows"):
