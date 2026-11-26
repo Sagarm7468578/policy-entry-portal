@@ -31,6 +31,13 @@ def _on_select_all_pdfs_change():
     st.session_state.drive_pdf_sel_ver += 1
 
 
+def _is_scanned_error(is_ok: bool, err_msg: str) -> bool:
+    if is_ok:
+        return False
+    low = str(err_msg or "").lower()
+    return ("scanned" in low) or ("image pdf" in low)
+
+
 def _render_status_bar(ctx, active_headers, is_custom_cols):
     is_mode2, is_mode3 = ctx["is_mode2"], ctx["is_mode3"]
     if is_mode3:
@@ -68,71 +75,17 @@ def _render_status_bar(ctx, active_headers, is_custom_cols):
     )
 
 
-def _render_quick_pdf_inspector(all_drive_files, ctx, active_headers):
-    """Admin-only instant PDF text & dry-run parser inspector — works directly from Drive list without saving any entry."""
-    if not (is_admin_user() and all_drive_files):
+def _render_plan_load_warning():
+    """Admin-only safety banner if any file in health_parsers/plans/ failed to load (e.g. filename typo)."""
+    if not is_admin_user():
         return
-
-    with st.expander("🔍 Quick PDF Text & Bugging Inspector (No Entry Required)", expanded=False):
-        st.caption("Select any PDF from this folder to download its raw text and run a live Dry-Run extraction test without saving to Excel.")
-        options = ["-- Select a PDF to inspect --"] + [f"{i + 1}. {f['name']}" for i, f in enumerate(all_drive_files)]
-        picked_idx = st.selectbox(
-            "Select PDF for Bugging",
-            options=range(len(options)),
-            format_func=lambda i: options[i],
-            key="quick_inspect_pdf_selector",
-        )
-
-        if picked_idx == 0:
-            return
-
-        f_meta = all_drive_files[picked_idx - 1]
-        fid, fname = f_meta["id"], f_meta["name"]
-        cache = st.session_state.quick_pdf_bytes_cache
-
-        if fid not in cache:
-            with st.spinner(f"Fetching PDF text for {fname}..."):
-                dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
-            if not dl_res.get("success") or not dl_res.get("content_b64"):
-                st.error(dl_res.get("message", "Could not download PDF from Google Drive."))
-                return
-            cache[fid] = base64.b64decode(dl_res["content_b64"])
-
-        pdf_bytes = cache[fid]
-        master_df = get_active_master_df(ctx["manual_master_file"])
-        accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
-
-        c_btn1, c_btn2 = st.columns([1, 3])
-        with c_btn1:
-            st.button("🔄 Re-Test Live Parser", key=f"retest_quick_{fid}", use_container_width=True)
-
-        row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
-        apply_share_commission(
-            [row_dict],
-            st.session_state.health_share_under60,
-            st.session_state.health_share_60plus,
-        )
-        projected, _ = project_rows_to_schema([row_dict], st.session_state.health_custom_columns)
-
-        st.write(
-            f"**File:** `{fname}`  |  **Detected Company:** `{debug_info['detected_company'] or 'None'}`  |  "
-            f"**Status:** {'✅ Parsed' if is_ok else '❌ Error'}"
-        )
-        if err_msg:
-            st.error(f"Error Reason: {err_msg}")
-
-        st.markdown("**Live Dry-Run Preview (Not Saved to Excel):**")
-        st.dataframe(pd.DataFrame(projected, columns=active_headers), use_container_width=True, hide_index=True)
-
-        raw_txt = debug_info.get("raw_text") or ""
-        st.download_button(
-            "📄 Download Raw PDF Text (.txt)",
-            data=raw_txt.encode("utf-8"),
-            file_name=f"DEBUG_{fname}.txt",
-            mime="text/plain",
-            key=f"quick_dl_txt_{fid}",
-        )
-        st.caption(f"Raw PDF text ready ({len(raw_txt):,} characters) — click Download Raw PDF Text (.txt) above.")
+    try:
+        from health_parsers.plans import PLAN_LOAD_ERRORS
+        if PLAN_LOAD_ERRORS:
+            details = " | ".join(f"`{m}.py`: {err}" for m, err in PLAN_LOAD_ERRORS.items())
+            st.warning(f"⚠️ Plan Parser Load Notice: {details}")
+    except Exception:
+        pass
 
 
 def _render_mode3_workspace(ctx, active_headers):
@@ -166,6 +119,7 @@ def _render_mode3_workspace(ctx, active_headers):
     with hdr2:
         if st.button("🔄 Scan Folder", use_container_width=True, key="rescan_drive_folder"):
             st.session_state.drive_scan_info, st.session_state.drive_last_scan_key = None, ""
+            st.session_state.pop("last_results", None)
             st.rerun()
 
     avail_years, avail_months = info.get("available_years", []), info.get("available_months", [])
@@ -184,9 +138,11 @@ def _render_mode3_workspace(ctx, active_headers):
 
         if chosen_yr != info.get("selected_year", ""):
             st.session_state.drive_selected_year, st.session_state.drive_selected_month, st.session_state.drive_scan_info = chosen_yr, "", None
+            st.session_state.pop("last_results", None)
             st.rerun()
         elif avail_months and chosen_mo != info.get("selected_month", ""):
             st.session_state.drive_selected_month, st.session_state.drive_scan_info = chosen_mo, None
+            st.session_state.pop("last_results", None)
             st.rerun()
 
     if st.session_state.drive_scan_error:
@@ -200,8 +156,6 @@ def _render_mode3_workspace(ctx, active_headers):
     if not all_drive_files:
         st.info("✅ No PDF files found in this folder. Add Health Policy PDFs and click **Scan Folder**.")
         return
-
-    _render_quick_pdf_inspector(all_drive_files, ctx, active_headers)
 
     include_done = True
     if already_done_files:
@@ -247,6 +201,9 @@ def _render_mode3_workspace(ctx, active_headers):
         if not active_m3_excel_url:
             st.warning("Please link your Google Drive `.xlsx` file first via **Left Sidebar → Mode 3 Drive Excel**.")
             return
+        # Clear previous round preview so only this current round's entries appear
+        st.session_state.pop("last_results", None)
+
         master_df = get_active_master_df(ctx["manual_master_file"])
         accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
         extracted_rows, done_files, error_files, error_details, debug_list = [], [], [], [], []
@@ -259,24 +216,30 @@ def _render_mode3_workspace(ctx, active_headers):
             dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
             if not dl_res.get("success") or not dl_res.get("content_b64"):
                 err_reason = dl_res.get("message", "Could not download PDF from Google Drive.")
+                error_files.append((fname, b""))
                 error_details.append({"File Name": fname, "Reason": err_reason})
                 error_track_items.append({"id": fid, "name": fname})
-                debug_list.append({"file_name": fname, "client_name": fname, "detected_company": "", "company_scores": {}, "raw_text": "", "error_reason": err_reason})
                 progress.progress((idx + 1) / len(target_files))
                 continue
 
             pdf_bytes = base64.b64decode(dl_res["content_b64"])
-            st.session_state.quick_pdf_bytes_cache[fid] = pdf_bytes
             row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
-            debug_list.append(debug_info)
-            extracted_rows.append(row_dict)
-            if is_ok:
-                done_files.append((fname, pdf_bytes))
-                done_track_items.append({"id": fid, "name": fname})
-            else:
+
+            if _is_scanned_error(is_ok, err_msg):
+                # Scanned / Image PDFs stay ONLY in the top Error list (never saved to Excel or shown in Preview Mode)
                 error_files.append((fname, pdf_bytes))
                 error_details.append({"File Name": fname, "Reason": err_msg})
                 error_track_items.append({"id": fid, "name": fname})
+            else:
+                debug_list.append(debug_info)
+                extracted_rows.append(row_dict)
+                if is_ok:
+                    done_files.append((fname, pdf_bytes))
+                    done_track_items.append({"id": fid, "name": fname})
+                else:
+                    error_files.append((fname, pdf_bytes))
+                    error_details.append({"File Name": fname, "Reason": err_msg})
+                    error_track_items.append({"id": fid, "name": fname})
             progress.progress((idx + 1) / len(target_files))
 
         status_text.empty()
@@ -319,6 +282,7 @@ def _render_upload_workspace(ctx):
     with hdr2:
         if st.button("🗑️ Clear All PDFs", use_container_width=True):
             st.session_state.pdf_uploader_key += 1
+            st.session_state.pop("last_results", None)
             st.rerun()
 
     uploaded_pdfs = st.file_uploader("Select one or more Health Policy PDFs", type=["pdf"], accept_multiple_files=True, key=f"pdf_uploader_{st.session_state.pdf_uploader_key}", label_visibility="collapsed")
@@ -333,6 +297,7 @@ def _render_upload_workspace(ctx):
         elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
             st.warning("Please link your Local Excel (.xlsx) file path via the Left Sidebar first.")
         else:
+            st.session_state.pop("last_results", None)
             master_df = get_active_master_df(ctx["manual_master_file"])
             accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
             extracted_rows, done_files, error_files, error_details, debug_list = [], [], [], [], []
@@ -342,13 +307,17 @@ def _render_upload_workspace(ctx):
                 status_text.text(f"Processing ({idx + 1}/{len(uploaded_pdfs)}): {pdf.name}")
                 pdf_bytes = pdf.read()
                 row_dict, is_ok, err_msg, debug_info = process_health_pdf(pdf.name, pdf_bytes, master_df, accounts_df=accounts_df)
-                debug_list.append(debug_info)
-                extracted_rows.append(row_dict)
-                if is_ok:
-                    done_files.append((pdf.name, pdf_bytes))
-                else:
+                if _is_scanned_error(is_ok, err_msg):
                     error_files.append((pdf.name, pdf_bytes))
                     error_details.append({"File Name": pdf.name, "Reason": err_msg})
+                else:
+                    debug_list.append(debug_info)
+                    extracted_rows.append(row_dict)
+                    if is_ok:
+                        done_files.append((pdf.name, pdf_bytes))
+                    else:
+                        error_files.append((pdf.name, pdf_bytes))
+                        error_details.append({"File Name": pdf.name, "Reason": err_msg})
                 progress.progress((idx + 1) / len(uploaded_pdfs))
 
             status_text.empty()
@@ -397,14 +366,14 @@ def _render_results_and_history(ctx, active_headers):
         if not is_mode3:
             z1, z2 = st.columns(2)
             with z1:
-                if res.get("round_excel_bytes"):
+                if res.get("round_excel_bytes") and res.get("batch_rows"):
                     st.download_button(f"📊 Download Batch #{res['round_no']} Excel", data=res["round_excel_bytes"], file_name=f"Batch_{res['round_no']}_Health_Entries_{res['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"latest_xlsx_{res['round_no']}_{res['timestamp']}")
             with z2:
                 if res["err_zip_bytes"]:
                     st.download_button(f"⚠️ Download Batch #{res['round_no']} Error PDFs (ZIP)", data=res["err_zip_bytes"], file_name=f"Batch_{res['round_no']}_Error_Policies_{res['timestamp']}.zip", mime="application/zip", use_container_width=True, key=f"latest_err_{res['round_no']}_{res['timestamp']}")
 
         if res["error_details"]:
-            st.warning("The following PDFs encountered extraction issues (review details below):")
+            st.warning("The following PDFs encountered extraction issues (excluded from Excel & Preview Mode):")
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
         if is_direct_sheet and res.get("batch_rows"):
@@ -425,7 +394,7 @@ def _render_results_and_history(ctx, active_headers):
                 with c_info:
                     st.markdown(f"**Batch #{b['round_no']} ({b.get('mode_used', 'Mode 1')})** — `{b['time_display']}`  \nTotal: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**")
                 with c_xlsx:
-                    if b.get("round_excel_bytes"):
+                    if b.get("round_excel_bytes") and b.get("batch_rows"):
                         st.download_button(f"📊 Batch #{b['round_no']} Excel", data=b["round_excel_bytes"], file_name=f"Batch_{b['round_no']}_Health_Entries_{b['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"hist_xlsx_{b['round_no']}_{b['timestamp']}")
                 with c_err:
                     if b["err_zip_bytes"]:
@@ -473,30 +442,6 @@ def _render_results_and_history(ctx, active_headers):
             st.info("Your Cloud Health Sheet is currently empty. Upload PDFs above to start recording entries.")
 
 
-def _render_admin_debug():
-    if not (is_admin_user() and st.session_state.batch_history):
-        return
-    with st.expander("🐞 Batch Bugging Console (Processed Rounds)"):
-        round_options = [f"Batch #{b['round_no']} ({b['time_display']}) - {b['total_count']} PDFs" for b in st.session_state.batch_history]
-        selected_round_idx = st.selectbox("Select Batch:", options=range(len(round_options)), format_func=lambda i: round_options[i], key="debug_round_selector")
-        chosen_batch = st.session_state.batch_history[selected_round_idx]
-        debug_list = chosen_batch.get("debug_list", [])
-        if debug_list:
-            pdf_labels = [f"{idx + 1}. {d.get('client_name') or d['file_name']}  —  [{d['file_name']}]" for idx, d in enumerate(debug_list)]
-            selected_pdf_idx = st.selectbox("Select PDF for Bugging", options=range(len(pdf_labels)), format_func=lambda i: pdf_labels[i], key=f"debug_pdf_selector_{chosen_batch['round_no']}")
-            selected_debug = debug_list[selected_pdf_idx]
-
-            st.write("**File Name:**", selected_debug["file_name"])
-            st.write("**Detected Company:**", selected_debug["detected_company"] or "None")
-            st.write("**Company Keyword Score:**", selected_debug["company_scores"] or "No match")
-            if selected_debug["error_reason"]:
-                st.error(f"Error Reason: {selected_debug['error_reason']}")
-
-            raw_txt = selected_debug["raw_text"] or ""
-            st.download_button("📄 Download Raw PDF Text (.txt)", data=raw_txt.encode("utf-8"), file_name=f"DEBUG_{selected_debug['file_name']}.txt", mime="text/plain", key=f"debug_dl_{chosen_batch['round_no']}_{selected_pdf_idx}")
-            st.caption(f"Raw PDF text ready ({len(raw_txt):,} characters) — click Download Raw PDF Text (.txt) above.")
-
-
 def render_workspace(ctx, active_headers, is_custom_cols):
     st.title("🛡️ MS.Soft Policy Mitra")
     st.caption("All-in-One Insurance Advisor Automation Suite")
@@ -509,6 +454,7 @@ def render_workspace(ctx, active_headers, is_custom_cols):
         st.stop()
 
     _render_status_bar(ctx, active_headers, is_custom_cols)
+    _render_plan_load_warning()
 
     if ctx["is_mode1"] and st.session_state.saved_health_rows is None:
         with st.spinner("Loading your saved Health Master Sheet..."):
@@ -523,4 +469,3 @@ def render_workspace(ctx, active_headers, is_custom_cols):
         _render_upload_workspace(ctx)
 
     _render_results_and_history(ctx, active_headers)
-    _render_admin_debug()
