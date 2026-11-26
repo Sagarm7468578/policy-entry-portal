@@ -80,9 +80,23 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 <meta charset="utf-8" />
 <style>
   * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-  body {{ margin: 0; padding: 4px 2px; background: transparent; color: #1e293b; }}
+  html, body {{
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: transparent;
+    color: #1e293b;
+  }}
+  .container {{
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 2px;
+  }}
 
   .toolbar {{
+    flex: 0 0 auto;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -134,9 +148,11 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
   .status-msg {{ font-size: 12px; font-weight: 600; color: #059669; display: none; }}
 
   .table-wrap {{
+    flex: 1 1 auto;
+    min-height: 0;
     width: 100%;
-    max-height: 760px;
     overflow: auto;
+    overscroll-behavior: contain;
     border: 1px solid #cbd5e1;
     border-radius: 8px;
     background: #ffffff;
@@ -221,6 +237,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 </style>
 </head>
 <body>
+<div class="container">
   <div class="toolbar">
     <div class="tool-group">
       <span class="btn active-red">🔴 Bug</span>
@@ -239,6 +256,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
   <div class="table-wrap">
     <table id="preview-table"></table>
   </div>
+</div>
 
 <script>
   const PAYLOAD = {data_json};
@@ -530,14 +548,14 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 def render_preview_table(rows: list, columns: list, batch_id: str, enable_highlighter: bool = False, debug_list: list = None):
     """
     Renders Preview Mode table for the current round only.
-    - Admin users get a tall click-to-highlight red bug table + Filter + 1-Click Download Bug Pack (.txt).
+    - Admin users get a locked-height click-to-highlight red bug table with zero scroll-chaining.
     - Regular users see the clean standard Streamlit dataframe.
     """
     if not rows:
         return
 
     if not enable_highlighter:
-        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=620)
+        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=560)
         return
 
     h_col1, h_col2 = st.columns([3, 1])
@@ -547,12 +565,12 @@ def render_preview_table(rows: list, columns: list, batch_id: str, enable_highli
         use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
     if not use_highlight_mode:
-        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=620)
+        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=560)
         return
 
     aligned_debug = _align_debug_to_rows(rows, columns, debug_list or [])
     sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(columns)}".encode("utf-8")).hexdigest()[:12]
     storage_key = f"ms_policy_mitra_hl_{sig}"
     html_str = _build_highlighter_html(rows, columns, storage_key, aligned_debug, batch_id)
-    iframe_height = min(max(460, 120 + len(rows) * 36), 840)
-    components.html(html_str, height=iframe_height, scrolling=True)
+    iframe_height = min(max(280, 120 + len(rows) * 34), 560)
+    components.html(html_str, height=iframe_height, scrolling=False)
