@@ -413,7 +413,12 @@ def _render_results_and_history(ctx, active_headers):
 
         if is_direct_sheet and res.get("batch_rows"):
             st.subheader("Preview Mode")
-            st.dataframe(pd.DataFrame(res["batch_rows"], columns=res.get("batch_columns") or active_headers), use_container_width=True, hide_index=True)
+            render_preview_table(
+                rows=res["batch_rows"],
+                columns=res.get("batch_columns") or active_headers,
+                batch_id=f"{res['round_no']}_{res['timestamp']}",
+                enable_highlighter=is_admin_user(),
+            )
 
     if not is_mode3 and st.session_state.batch_history:
         with st.expander(f"🗂️ Last {len(st.session_state.batch_history)} Batches Download History (Max {MAX_PDF_ROUNDS})", expanded=(len(st.session_state.batch_history) > 1)):
