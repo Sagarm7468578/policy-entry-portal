@@ -1,5 +1,8 @@
 import base64
+import importlib
 import os
+import sys
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 from health_parser import (
@@ -25,6 +28,8 @@ from portal.state import (
 )
 from portal.bug_highlighter import render_preview_table
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
 
 def _on_select_all_pdfs_change():
     st.session_state.drive_pdf_sel_default = bool(st.session_state.get("m3_select_all_cb", True))
@@ -36,6 +41,75 @@ def _is_scanned_error(is_ok: bool, err_msg: str) -> bool:
         return False
     low = str(err_msg or "").lower()
     return ("scanned" in low) or ("image pdf" in low)
+
+
+def _reload_health_parsers():
+    """Evicts cached parser modules and re-imports fresh code from disk so 1-click Re-Test picks up new GitHub commits immediately."""
+    importlib.invalidate_caches()
+    for mod_name in list(sys.modules.keys()):
+        if mod_name == "health_parser" or mod_name == "health_parsers" or mod_name.startswith("health_parsers."):
+            sys.modules.pop(mod_name, None)
+    hp_mod = importlib.import_module("health_parser")
+    return hp_mod.process_health_pdf, hp_mod.project_rows_to_schema
+
+
+def _attach_retest_cache(retest_pdfs: list, extracted_rows: list):
+    """Stores current round's PDF bytes in memory so Admin can Re-Test Preview without re-downloading or saving to Excel."""
+    if "last_results" not in st.session_state:
+        return
+    lr = st.session_state["last_results"]
+    batch_rows = lr.get("batch_rows") or []
+    if len(batch_rows) == len(retest_pdfs):
+        lr["retest_pdfs"] = retest_pdfs
+    else:
+        kept_pols = {str(r.get("Policy Number", "")).strip() for r in batch_rows}
+        lr["retest_pdfs"] = [
+            item for item, er in zip(retest_pdfs, extracted_rows)
+            if str(er.get("Policy Number", "")).strip() in kept_pols
+        ]
+    lr["retest_count"] = 0
+    lr["retest_time"] = ""
+
+
+def _run_preview_retest(ctx, res):
+    """Reloads latest parsers and re-parses cached PDFs for Preview Mode ONLY (no Excel/Sheet save)."""
+    cached_pdfs = res.get("retest_pdfs") or []
+    if not cached_pdfs:
+        st.warning("No cached PDFs found for this batch — please run a fresh batch once to enable 1-click Re-Test.")
+        return
+
+    with st.spinner(f"🔄 Reloading latest parsers & re-testing {len(cached_pdfs)} PDFs (Preview only — No Excel save)..."):
+        fresh_process_pdf, fresh_project_schema = _reload_health_parsers()
+        master_df = get_active_master_df(ctx["manual_master_file"])
+        accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
+
+        new_rows = []
+        new_debug_list = []
+        for item in cached_pdfs:
+            row_dict, _is_ok, _err_msg, debug_info = fresh_process_pdf(
+                item["file_name"],
+                item["pdf_bytes"],
+                master_df,
+                accounts_df=accounts_df,
+            )
+            new_rows.append(row_dict)
+            new_debug_list.append(debug_info)
+
+        if new_rows:
+            apply_share_commission(
+                new_rows,
+                st.session_state.health_share_under60,
+                st.session_state.health_share_60plus,
+            )
+            if st.session_state.health_renewal_folder_url:
+                apply_renewal_list_lookup(new_rows, st.session_state.health_renewal_folder_url)
+
+        proj_rows, proj_schema = fresh_project_schema(new_rows, st.session_state.health_custom_columns)
+        res["batch_rows"] = proj_rows
+        res["batch_columns"] = proj_schema["headers"]
+        res["debug_list"] = new_debug_list
+        res["retest_count"] = int(res.get("retest_count", 0)) + 1
+        res["retest_time"] = datetime.now(IST).strftime("%I:%M:%S %p")
 
 
 def _render_status_bar(ctx, active_headers, is_custom_cols):
@@ -206,7 +280,7 @@ def _render_mode3_workspace(ctx, active_headers):
         master_df = get_active_master_df(ctx["manual_master_file"])
         accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
         extracted_rows, done_files, error_files, error_details, debug_list = [], [], [], [], []
-        done_track_items, error_track_items = [], []
+        done_track_items, error_track_items, retest_pdfs = [], [], []
 
         progress, status_text = st.progress(0), st.empty()
         for idx, f_meta in enumerate(target_files):
@@ -231,6 +305,7 @@ def _render_mode3_workspace(ctx, active_headers):
             else:
                 debug_list.append(debug_info)
                 extracted_rows.append(row_dict)
+                retest_pdfs.append({"file_name": fname, "pdf_bytes": pdf_bytes})
                 if is_ok:
                     done_files.append((fname, pdf_bytes))
                     done_track_items.append({"id": fid, "name": fname})
@@ -268,6 +343,7 @@ def _render_mode3_workspace(ctx, active_headers):
             skip_duplicates=skip_duplicates_m3, drive_target_url=active_m3_excel_url,
             drive_target_tab=st.session_state.mode3_excel_tab, is_mode3_excel_slot=True,
         )
+        _attach_retest_cache(retest_pdfs, extracted_rows)
         st.session_state.drive_scan_info, st.session_state.drive_last_scan_key = None, ""
         st.rerun()
 
@@ -299,6 +375,7 @@ def _render_upload_workspace(ctx):
             master_df = get_active_master_df(ctx["manual_master_file"])
             accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
             extracted_rows, done_files, error_files, error_details, debug_list = [], [], [], [], []
+            retest_pdfs = []
 
             progress, status_text = st.progress(0), st.empty()
             for idx, pdf in enumerate(uploaded_pdfs):
@@ -311,6 +388,7 @@ def _render_upload_workspace(ctx):
                 else:
                     debug_list.append(debug_info)
                     extracted_rows.append(row_dict)
+                    retest_pdfs.append({"file_name": pdf.name, "pdf_bytes": pdf_bytes})
                     if is_ok:
                         done_files.append((pdf.name, pdf_bytes))
                     else:
@@ -338,6 +416,7 @@ def _render_upload_workspace(ctx):
                 mode2_target_type=mode2_target_type, skip_duplicates=skip_duplicates,
                 drive_target_url=st.session_state.fixed_sheet_url, drive_target_tab=st.session_state.fixed_sheet_tab,
             )
+            _attach_retest_cache(retest_pdfs, extracted_rows)
             st.session_state.pdf_uploader_key += 1
             st.rerun()
 
@@ -375,13 +454,36 @@ def _render_results_and_history(ctx, active_headers):
             st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
         if is_direct_sheet and res.get("batch_rows"):
-            st.subheader("Preview Mode")
+            if is_admin_user():
+                p_hdr1, p_hdr2 = st.columns([3, 1.6])
+                with p_hdr1:
+                    st.subheader("Preview Mode")
+                with p_hdr2:
+                    has_cache = bool(res.get("retest_pdfs"))
+                    if st.button(
+                        "🔄 Re-Test Preview (No Excel Save)",
+                        use_container_width=True,
+                        disabled=not has_cache,
+                        help="Reloads latest GitHub parser fixes on current batch PDFs without saving to Excel — fixed 🔴 cells auto-turn 🟢 Green!",
+                        key=f"retest_preview_btn_{res['round_no']}_{res['timestamp']}",
+                    ):
+                        _run_preview_retest(ctx, res)
+                        st.rerun()
+                if res.get("retest_count", 0) > 0:
+                    st.success(
+                        f"🟢 Live Re-Test #{res['retest_count']} complete ({res.get('retest_time', '')}) — "
+                        f"Fixed 🔴 cells automatically turned 🟢 Green! (Drive Excel untouched)"
+                    )
+            else:
+                st.subheader("Preview Mode")
+
             render_preview_table(
                 rows=res["batch_rows"],
                 columns=res.get("batch_columns") or active_headers,
                 batch_id=f"{res['round_no']}_{res['timestamp']}",
                 enable_highlighter=is_admin_user(),
                 debug_list=res.get("debug_list", []),
+                retest_count=int(res.get("retest_count", 0)),
             )
 
     if not is_mode3 and st.session_state.batch_history:
