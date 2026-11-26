@@ -1,4 +1,5 @@
 import os
+import re
 import pandas as pd
 import streamlit as st
 from health_parser import (
@@ -19,6 +20,13 @@ from portal.backend import (
     save_local_excel_path,
 )
 from portal.state import DEFAULTS
+
+COMMISSION_RATE_OPTIONS = [str(r) for r in range(5, 26)]
+
+
+def _norm_rate_opt(raw_val, default_str):
+    digits = re.sub(r"[^0-9]", "", str(raw_val or ""))
+    return digits if digits in COMMISSION_RATE_OPTIONS else default_str
 
 
 def _render_category_folder_panel(title, caption, folder_specs, expanded=False, reset_health_scan=False, footer_tip=""):
@@ -337,12 +345,49 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
             footer_tip="💡 Linking the main category folder (e.g. `HEALTH`) auto-detects year subfolders (`2026`, `2027`...).",
         )
 
-        # 6. CUSTOM SHEET COLUMNS PANEL
+        # 6. COMMISSION / SHARE % PANEL (USER-CONFIGURABLE 5% TO 25%)
+        cur_u60 = _norm_rate_opt(st.session_state.health_share_under60, "12")
+        cur_p60 = _norm_rate_opt(st.session_state.health_share_60plus, "8")
+        with st.expander(f"💰 Share / Commission ({cur_u60}% / {cur_p60}%)", expanded=False):
+            st.caption(
+                "Configure age-based Health commission rates (5%–25%).  \n"
+                "Auto-fills **Share %** from DOB age and calculates **Share** = `Premium × Share %`."
+            )
+            sel_u60 = st.selectbox(
+                "Age Below 60 Commission %",
+                options=COMMISSION_RATE_OPTIONS,
+                index=COMMISSION_RATE_OPTIONS.index(cur_u60),
+                format_func=lambda x: f"{x}%",
+                key="sb_share_under60",
+            )
+            sel_p60 = st.selectbox(
+                "Age 60+ Commission %",
+                options=COMMISSION_RATE_OPTIONS,
+                index=COMMISSION_RATE_OPTIONS.index(cur_p60),
+                format_func=lambda x: f"{x}%",
+                key="sb_share_60plus",
+            )
+            if st.button("💾 Save Commission Rates", type="primary", use_container_width=True, key="btn_save_share_rates"):
+                with st.spinner("Saving commission rates..."):
+                    s_res = save_user_sheet_settings(
+                        st.session_state.user_id,
+                        health_share_under60=sel_u60,
+                        health_share_60plus=sel_p60,
+                    )
+                if s_res.get("success"):
+                    st.session_state.health_share_under60 = sel_u60
+                    st.session_state.health_share_60plus = sel_p60
+                    st.success(f"Saved: Below 60 = {sel_u60}% | 60+ = {sel_p60}%")
+                    st.rerun()
+                else:
+                    st.error(s_res.get("message", "Failed to save commission rates."))
+
+        # 7. CUSTOM SHEET COLUMNS PANEL
         col_badge = f"Custom: {len(active_headers)}" if is_custom_cols else f"Default: {len(OUTPUT_COLUMNS)}"
         with st.expander(f"🛠️ Sheet Columns ({col_badge})", expanded=False):
             st.caption(
                 "Enter one column per line in exact order.  \n"
-                "• Auto-fill fields: Client Name, Policy Number, Occupation, Accounts, PYP premium, etc.  \n"
+                "• Auto-fill fields: Client Name, Policy Number, Occupation, Accounts, Share, Share %, PYP premium, etc.  \n"
                 "• Blank/Manual column: Enter any custom column name (e.g. `Mail`, `Print`, `Folder`)  \n"
                 "• Rename header: `Client Name => Insured Name`"
             )
