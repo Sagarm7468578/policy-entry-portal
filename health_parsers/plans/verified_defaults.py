@@ -12,13 +12,19 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("STAR HEALTH", "STAR HEALTH ASSURE"),
     ("STAR HEALTH", "AROGYA SANJEEVANI"),
     ("STAR HEALTH", "SENIOR CITIZENS RED CARPET"),
+    ("STAR HEALTH", "HOSPITAL CASH"),
     ("IFFCO TOKIO", "FHP"),
     ("ADITYA BIRLA", "ACTIV HEALTH"),
+    ("ADITYA BIRLA", "ACTIV YUVA"),
 }
 
 # Verified plans where renewal continues with the SAME policy number if no separate PYP is printed
 VERIFIED_SAME_POLICY_ON_RENEWAL = {
     ("IFFCO TOKIO", "FHP"),
+    ("MANIPAL CIGNA", "SUPER TOP UP PLUS"),
+    ("MANIPAL CIGNA", "SUPER TOP UP SELECT"),
+    ("MANIPAL CIGNA", "SARVAH PARAM"),
+    ("MANIPAL CIGNA", "SARVAH UTTAM"),
 }
 
 
@@ -65,6 +71,10 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
         if re.search(r"(?i)Policy\s*Category\s*[:\-]?\s*[\r\n\s]*\b(?:Fresh|New)\b", pdf_text) or re.search(r"(?i)\bNew\s+Business\b", pdf_text):
             if not re.search(r"(?i)Ported\s*Policy\s*[:\-]?\s*[\r\n\s]*Yes\b", pdf_text) and not re.search(r"(?i)Portable\s*Case\s*[:\-]?\s*[\r\n\s]*Yes\b", pdf_text):
                 return True
+    if company == "ADITYA BIRLA":
+        if re.search(r"(?i)Policy\s*Category\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*\b(?:Fresh|New)\b", pdf_text):
+            if not re.search(r"(?i)Portability(?:/Migration)?\s*[\r\n\s]*[:\-]?\s*Yes\b", pdf_text):
+                return True
     if company == "TATA AIG":
         if re.search(r"(?i)Travel\s+Insurance", pdf_text):
             return True
@@ -75,7 +85,10 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
 
 def _is_explicit_renewal(pdf_text: str) -> bool:
     return bool(
-        re.search(r"(?i)(?:Thank\s+you\s+for\s+renewing|Renewal\s+of\s+Your|Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Renewal|ITGI[\r\n\s]+RENEWAL)", pdf_text)
+        re.search(
+            r"(?i)(?:Thank\s+you\s+for\s+renewing|Renewal\s+of\s+Your|Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Renewal|ITGI[\r\n\s]+RENEWAL|\bRenewals\b)",
+            pdf_text,
+        )
     )
 
 
