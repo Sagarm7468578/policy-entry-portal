@@ -1,0 +1,164 @@
+* { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  color: #1e293b;
+}
+.container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 2px;
+}
+
+.toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.tool-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sep { width: 1px; height: 22px; background: #cbd5e1; margin: 0 2px; }
+
+.btn {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #1e293b;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: all 0.12s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+}
+.btn:hover { background: #f1f5f9; }
+.btn.active-red { background: #fee2e2; border-color: #dc2626; color: #991b1b; box-shadow: 0 0 0 1px #dc2626; cursor: default; }
+.btn.active-filter { background: #1e40af; border-color: #1e40af; color: #ffffff; }
+.btn.primary { background: #1f4e78; border-color: #1f4e78; color: #ffffff; }
+.btn.primary:hover { background: #163a5a; }
+.btn.pack { background: #0f766e; border-color: #0f766e; color: #ffffff; }
+.btn.pack:hover { background: #115e59; }
+.btn.clear-green { color: #166534; border-color: #86efac; background: #f0fdf4; }
+.btn.clear-green:hover { background: #dcfce7; }
+.btn.danger { color: #b91c1c; border-color: #fca5a5; }
+.btn.danger:hover { background: #fef2f2; }
+
+.badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+}
+.badge.has-bugs { background: #fee2e2; color: #991b1b; }
+.badge.has-fixed { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.status-msg { font-size: 12px; font-weight: 600; color: #059669; display: none; }
+
+.table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: 12.5px;
+}
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #1f4e78;
+  color: #ffffff;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 10px;
+  border-right: 1px solid #2e6496;
+  border-bottom: 2px solid #163a5a;
+  white-space: nowrap;
+  user-select: none;
+}
+tbody tr:nth-child(even) td { background: #f8fafc; }
+tbody tr:nth-child(odd) td { background: #ffffff; }
+tbody tr:hover td { background: #f1f5f9; }
+
+td {
+  padding: 7px 10px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.08s ease;
+}
+td.row-num {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #f1f5f9 !important;
+  color: #475569;
+  font-weight: 700;
+  text-align: center;
+  cursor: default;
+  min-width: 38px;
+  border-right: 2px solid #cbd5e1;
+}
+thead th.row-num-hdr {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  text-align: center;
+  min-width: 38px;
+}
+td.sticky-name {
+  position: sticky;
+  left: 38px;
+  z-index: 2;
+  font-weight: 600;
+  border-right: 2px solid #cbd5e1;
+}
+thead th.sticky-name-hdr {
+  position: sticky;
+  left: 38px;
+  z-index: 5;
+  border-right: 2px solid #2e6496;
+}
+td.empty-cell { color: #94a3b8; font-style: italic; }
+
+td.hl-red {
+  background: #fecaca !important;
+  color: #7f1d1d !important;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 2px #dc2626;
+}
+td.hl-green {
+  background: #dcfce7 !important;
+  color: #14532d !important;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 2px #16a34a;
+}
