@@ -19,7 +19,7 @@ from portal.backend import (
 
 IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_HEALTH_EXCEL_NAME = "POLICY ENTRY SHEET FOR HEALTH.xlsx"
-MAX_PDF_ROUNDS = 5
+MAX_PDF_ROUNDS = 1
 
 DEFAULTS = {
     "logged_in": False, "auth_method": "", "user_id": "", "user_email": "", "user_name": "",
@@ -192,7 +192,9 @@ def save_and_record_batch(
     projected_rows, used_schema = project_rows_to_schema(extracted_rows, st.session_state.health_custom_columns)
     save_msg, save_error, skipped_count = "", "", 0
 
-    if is_direct_sheet:
+    if not extracted_rows:
+        save_msg = "No readable entries to save in this round (all selected PDFs were skipped as Scanned / Error)."
+    elif is_direct_sheet:
         if mode2_target_type == "local_excel":
             with st.spinner("Saving entries to linked Local Excel (.xlsx)..."):
                 ok, msg, added, skipped, total_cnt = append_rows_to_local_excel(
@@ -251,13 +253,15 @@ def save_and_record_batch(
         for fname, fbytes in done_files:
             zf.writestr(f"Done/{fname}", fbytes)
         for fname, fbytes in error_files:
-            zf.writestr(f"Error/{fname}", fbytes)
+            if fbytes:
+                zf.writestr(f"Error/{fname}", fbytes)
 
     err_zip_bytes = None
-    if error_files:
+    valid_err_files = [(fn, fb) for fn, fb in error_files if fb]
+    if valid_err_files:
         err_zip_buf = io.BytesIO()
         with zipfile.ZipFile(err_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for fname, fbytes in error_files:
+            for fname, fbytes in valid_err_files:
                 zf.writestr(fname, fbytes)
         err_zip_bytes = err_zip_buf.getvalue()
 
@@ -276,12 +280,11 @@ def save_and_record_batch(
         "save_error": save_error,
         "batch_rows": projected_rows,
         "batch_columns": used_schema["headers"],
-        "round_excel_bytes": build_excel_bytes(projected_rows, columns=used_schema["headers"], col_types=used_schema["col_types"]),
+        "round_excel_bytes": build_excel_bytes(projected_rows, columns=used_schema["headers"], col_types=used_schema["col_types"]) if projected_rows else b"",
         "error_details": error_details,
         "debug_list": debug_list,
         "all_zip_bytes": all_zip_buf.getvalue(),
         "err_zip_bytes": err_zip_bytes,
     }
-    st.session_state.batch_history.insert(0, batch_record)
-    st.session_state.batch_history = st.session_state.batch_history[:MAX_PDF_ROUNDS]
+    st.session_state.batch_history = [batch_record]
     st.session_state["last_results"] = batch_record
