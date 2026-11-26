@@ -129,7 +129,6 @@ def _build_highlighter_html(
         "      <span id='fixed-count' class='badge has-fixed' style='display:none;'>🟢 0 Fixed</span>"
         "      <button id='btn-filter' class='btn' onclick='toggleFilter()'>🔎 Highlighted Rows</button>"
         "      <button class='btn pack' onclick='downloadBugPack()'>📥 Download Bug Pack + PDF Text (.txt)</button>"
-        "      <button class='btn primary' onclick='copyBugList()'>📋 Copy Summary</button>"
         "      <button id='btn-clear-green' class='btn clear-green' onclick='clearFixed()' style='display:none;'>🧹 Clear Fixed (🟢)</button>"
         "      <button class='btn danger' onclick='clearAll()'>🗑️ Clear All</button>"
         "      <span id='status-msg' class='status-msg'></span>"
