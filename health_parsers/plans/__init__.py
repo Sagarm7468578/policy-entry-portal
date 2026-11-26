@@ -2,6 +2,10 @@ from health_parsers.plans.hdfc_sarv_suraksha_plus_group import (
     is_hdfc_sarv_suraksha_plus_group,
     parse_hdfc_sarv_suraksha_plus_group,
 )
+from health_parsers.plans.hdfc_individual_pa import (
+    is_hdfc_individual_pa,
+    parse_hdfc_individual_pa,
+)
 from health_parsers.plans.star_health_assure import (
     is_star_health_assure,
     parse_star_health_assure,
@@ -14,11 +18,16 @@ from health_parsers.plans.national_parivar_mediclaim import (
     is_national_parivar_mediclaim,
     parse_national_parivar_mediclaim,
 )
+from health_parsers.plans.new_india_cpa_vehicle import (
+    is_new_india_cpa_vehicle,
+    parse_new_india_cpa_vehicle,
+)
 
 # Plan-wise isolated parsers (main company parsers remain untouched)
 PLAN_PARSERS = {
     "HDFC ERGO": [
         (is_hdfc_sarv_suraksha_plus_group, parse_hdfc_sarv_suraksha_plus_group),
+        (is_hdfc_individual_pa, parse_hdfc_individual_pa),
     ],
     "STAR HEALTH": [
         (is_star_health_assure, parse_star_health_assure),
@@ -26,6 +35,9 @@ PLAN_PARSERS = {
     ],
     "NATIONAL": [
         (is_national_parivar_mediclaim, parse_national_parivar_mediclaim),
+    ],
+    "NEW INDIA": [
+        (is_new_india_cpa_vehicle, parse_new_india_cpa_vehicle),
     ],
 }
 
