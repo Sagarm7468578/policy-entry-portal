@@ -9,6 +9,7 @@ _PLAN_SPECS = [
     ("HDFC ERGO", "hdfc_koti_suraksha", "is_hdfc_koti_suraksha", "parse_hdfc_koti_suraksha"),
     ("HDFC ERGO", "hdfc_energy", "is_hdfc_energy", "parse_hdfc_energy"),
     ("HDFC ERGO", "hdfc_individual_pa", "is_hdfc_individual_pa", "parse_hdfc_individual_pa"),
+    ("HDFC ERGO", "hdfc_arogya_sanjeevani", "is_hdfc_arogya_sanjeevani", "parse_hdfc_arogya_sanjeevani"),
     ("STAR HEALTH", "star_health_assure", "is_star_health_assure", "parse_star_health_assure"),
     ("STAR HEALTH", "star_medi_classic_individual", "is_star_medi_classic_individual", "parse_star_medi_classic_individual"),
     ("STAR HEALTH", "star_super_surplus", "is_star_super_surplus", "parse_star_super_surplus"),
@@ -26,6 +27,7 @@ _PLAN_SPECS = [
     ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
     ("MANIPAL CIGNA", "manipal_cigna_sarvah", "is_manipal_cigna_sarvah", "parse_manipal_cigna_sarvah"),
     ("ADITYA BIRLA", "aditya_birla_activ_one", "is_aditya_birla_activ_one", "parse_aditya_birla_activ_one"),
+    ("ADITYA BIRLA", "aditya_birla_activ_health", "is_aditya_birla_activ_health", "parse_aditya_birla_activ_health"),
     ("IFFCO TOKIO", "iffco_tokio_fhp", "is_iffco_tokio_fhp", "parse_iffco_tokio_fhp"),
     ("TATA AIG", "tata_aig_travel", "is_tata_aig_travel", "parse_tata_aig_travel"),
 ]
