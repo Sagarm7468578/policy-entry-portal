@@ -10,7 +10,10 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("HDFC ERGO", "OS"),
     ("STAR HEALTH", "FAMILY ACCIDENT CARE"),
     ("STAR HEALTH", "STAR HEALTH ASSURE"),
+    ("STAR HEALTH", "AROGYA SANJEEVANI"),
+    ("STAR HEALTH", "SENIOR CITIZENS RED CARPET"),
     ("IFFCO TOKIO", "FHP"),
+    ("ADITYA BIRLA", "ACTIV HEALTH"),
 }
 
 # Verified plans where renewal continues with the SAME policy number if no separate PYP is printed
