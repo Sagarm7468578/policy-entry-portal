@@ -1,25 +1,32 @@
 import re
 
-# Plans verified during bugging where Premium Mode is genuinely NOT printed in the insurer PDF
+# Plans verified during bugging where Premium Mode may genuinely be absent in the insurer PDF
+# (Only applied if parser found blank — if ONLINE/CHEQUE/CASH is printed, that real value is kept!)
 VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NIVA BUPA", "REASSURE 2.0"),
     ("NIVA BUPA", "REASSURE 3.0"),
+    ("NIVA BUPA", "HEALTH RECHARGE"),
     ("HDFC ERGO", "OPTIMA RESTORE"),
+    ("HDFC ERGO", "OS"),
     ("STAR HEALTH", "FAMILY ACCIDENT CARE"),
+    ("STAR HEALTH", "STAR HEALTH ASSURE"),
+    ("IFFCO TOKIO", "FHP"),
 }
 
 # Verified plans where renewal continues with the SAME policy number if no separate PYP is printed
-VERIFIED_SAME_POLICY_ON_RENEWAL = set()
+VERIFIED_SAME_POLICY_ON_RENEWAL = {
+    ("IFFCO TOKIO", "FHP"),
+}
 
 
 def _derive_hdfc_pyp(policy_number: str) -> str:
     """
-    HDFC ERGO 19-digit policy format: [14-digit base][2-digit renewal count][000].
+    HDFC ERGO 19-digit policy format: [14-digit base][2-digit renewal count][000/001].
     - Renewal count > 00 -> decrement count by 1 (e.g. ...06000 -> ...05000).
     - Renewal count == 00 -> Fresh policy ("FRESH").
     """
     digits = re.sub(r"\s+", "", str(policy_number or ""))
-    if re.fullmatch(r"\d{19}", digits) and digits.endswith("000"):
+    if re.fullmatch(r"\d{19}", digits) and digits[-3:].startswith("00"):
         base = digits[:14]
         ren_cnt = int(digits[14:16])
         if ren_cnt > 0:
@@ -65,7 +72,7 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
 
 def _is_explicit_renewal(pdf_text: str) -> bool:
     return bool(
-        re.search(r"(?i)(?:Thank\s+you\s+for\s+renewing|Renewal\s+of\s+Your|Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Renewal)", pdf_text)
+        re.search(r"(?i)(?:Thank\s+you\s+for\s+renewing|Renewal\s+of\s+Your|Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Renewal|ITGI[\r\n\s]+RENEWAL)", pdf_text)
     )
 
 
@@ -84,7 +91,7 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
     plan = str(data.get("plan_name") or "").strip().upper()
     pol_no = str(data.get("policy_number") or "").strip()
 
-    # 1. PYP Number rules (only if parser did not already extract an explicit PYP from the PDF)
+    # 1. PYP Number rules
     if not str(data.get("pyp_number") or "").strip():
         derived = ""
         if comp == "HDFC ERGO":
@@ -99,7 +106,7 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
         elif (comp, plan) in VERIFIED_SAME_POLICY_ON_RENEWAL and _is_explicit_renewal(pdf_text) and pol_no:
             data["pyp_number"] = pol_no
 
-    # 2. Premium Mode: mark "FILL MANUAL" only for verified plans whose PDFs never print payment mode
+    # 2. Premium Mode: mark "FILL MANUAL" only for verified plans when absent in PDF
     if not str(data.get("premium_mode") or "").strip():
         if (comp, plan) in VERIFIED_FILL_MANUAL_PREMIUM_MODE:
             data["premium_mode"] = "FILL MANUAL"
