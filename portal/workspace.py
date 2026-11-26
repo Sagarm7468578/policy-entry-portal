@@ -13,6 +13,7 @@ from portal.backend import (
     call_backend,
     load_saved_health_rows,
     apply_renewal_list_lookup,
+    apply_share_commission,
     scan_drive_folder_pdfs,
 )
 from portal.state import (
@@ -50,6 +51,7 @@ def _render_status_bar(ctx, active_headers, is_custom_cols):
     manual_h_acc = ctx["manual_acc_files"]["health"]
     acc_status = (f"✅ {h_acc_cnt} Rules" if not st.session_state.health_accounts_error else "⚠️ Error") if st.session_state.health_accounts_url else (f"📄 `{manual_h_acc.name}`" if manual_h_acc else "⚪ Not Linked")
     rn_status = f"✅ `{st.session_state.health_renewal_folder_name or 'Linked'}`" if st.session_state.health_renewal_folder_url else "⚪ Not Linked"
+    share_status = f"{st.session_state.health_share_under60 or '12'}% / {st.session_state.health_share_60plus or '8'}%"
     cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
     mode_short = "Mode 3 (Drive Excel + Folder)" if is_mode3 else ("Mode 2 (Google Sheet)" if is_mode2 else "Mode 1 (Download)")
     folder_part = ""
@@ -58,7 +60,11 @@ def _render_status_bar(ctx, active_headers, is_custom_cols):
         hf_nm = scan_inf.get("active_path") or st.session_state.health_folder_name or "Health Folder"
         folder_part = f"  |  **PDF Folder:** {'✅ `' + hf_nm + '`' if st.session_state.health_folder_url else '⚠️ Not Linked'}"
 
-    st.caption(f"**Mode:** {mode_short}{folder_part}  |  **{ps_label}:** {ps_status}  |  **Client Master:** {cm_status}  |  **Accounts:** {acc_status}  |  **Renewal List:** {rn_status}  |  **Format:** {cols_status}")
+    st.caption(
+        f"**Mode:** {mode_short}{folder_part}  |  **{ps_label}:** {ps_status}  |  "
+        f"**Client Master:** {cm_status}  |  **Accounts:** {acc_status}  |  "
+        f"**Renewal List:** {rn_status}  |  **Share %:** `{share_status}`  |  **Format:** {cols_status}"
+    )
 
 
 def _render_quick_pdf_inspector(all_drive_files, ctx, active_headers):
@@ -100,6 +106,11 @@ def _render_quick_pdf_inspector(all_drive_files, ctx, active_headers):
             st.button("🔄 Re-Test Live Parser", key=f"retest_quick_{fid}", use_container_width=True)
 
         row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
+        apply_share_commission(
+            [row_dict],
+            st.session_state.health_share_under60,
+            st.session_state.health_share_60plus,
+        )
         projected, _ = project_rows_to_schema([row_dict], st.session_state.health_custom_columns)
 
         st.write(
@@ -274,6 +285,13 @@ def _render_mode3_workspace(ctx, active_headers):
         status_text.empty()
         progress.empty()
 
+        if extracted_rows:
+            apply_share_commission(
+                extracted_rows,
+                st.session_state.health_share_under60,
+                st.session_state.health_share_60plus,
+            )
+
         if st.session_state.health_renewal_folder_url and extracted_rows:
             with st.spinner("Matching Renewal List PDFs for PYP Premium & Renewal Status..."):
                 apply_renewal_list_lookup(extracted_rows, st.session_state.health_renewal_folder_url)
@@ -338,6 +356,13 @@ def _render_upload_workspace(ctx):
 
             status_text.empty()
             progress.empty()
+
+            if extracted_rows:
+                apply_share_commission(
+                    extracted_rows,
+                    st.session_state.health_share_under60,
+                    st.session_state.health_share_60plus,
+                )
 
             if st.session_state.health_renewal_folder_url and extracted_rows:
                 with st.spinner("Matching Renewal List PDFs for PYP Premium & Renewal Status..."):
@@ -470,7 +495,7 @@ def _render_admin_debug():
 
 
 def render_workspace(ctx, active_headers, is_custom_cols):
-    st.title("🛡️ Soft.SM Policy Mitra")
+    st.title("🛡️ MS.Soft Policy Mitra")
     st.caption("All-in-One Insurance Advisor Automation Suite")
 
     if ctx["policy_category"] != "Health Insurance":
