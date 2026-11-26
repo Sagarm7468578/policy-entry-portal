@@ -188,12 +188,12 @@ def extract_generic_agency(pdf_text: str) -> str:
 
 def extract_premium_mode(pdf_text: str) -> str:
     for m_pay in re.finditer(
-        r"(?i)(?:Mode\s*of\s*Payment|(?<!Premium\s)Payment\s*Mode|Payment\s*Details|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Payment\s*Method)([\s\S]{0,250})",
+        r"(?i)(?:Mode\s*of\s*Payment|(?<!Premium\s)Payment\s*Mode|Payment\s*Details|Payment\s*received\s*by|Instrument\s*Details|Instrument\s*(?:No\.?|Number)|Payment\s*Method)([\s\S]{0,280})",
         pdf_text,
     ):
         block = m_pay.group(0)
         block = re.split(
-            r"(?i)(?:Eligibility\s*of\s*Premium|Section\s*80D|Income\s*Tax\s*Act|Terms\s*&\s*Conditions)",
+            r"(?i)(?:Eligibility\s*of\s*Premium|Section\s*80D|Income\s*Tax\s*Act|Terms\s*&\s*Conditions|Processing\s*Centre)",
             block,
         )[0]
         clean_block = re.sub(
@@ -203,7 +203,7 @@ def extract_premium_mode(pdf_text: str) -> str:
         )
 
         if re.search(
-            r"(?i)\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU)\b",
+            r"(?i)\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU|Payment\s*Gateway|Gateway|BizDirect|OPS[A-Z0-9]{8,}|EASI\d{8,}|QR_RENEWAL)\b",
             clean_block,
         ):
             return "ONLINE"
@@ -212,11 +212,15 @@ def extract_premium_mode(pdf_text: str) -> str:
             return "CHEQUE"
 
         if re.search(r"(?i)Instrument\s*(?:Details|No\.?|Number)", clean_block):
-            m_inst = re.search(
+            if re.search(
+                r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,120}?(?<![A-Za-z0-9/\-])(\d{12,24})(?![A-Za-z0-9/\-])",
+                clean_block,
+            ):
+                return "ONLINE"
+            if re.search(
                 r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,200}?(?<![A-Za-z0-9/\-])(\d{6})(?![A-Za-z0-9/\-])",
                 clean_block,
-            )
-            if m_inst:
+            ):
                 return "CHEQUE"
 
         if re.search(r"(?i)\b(?:ECS|NACH|Auto\s*Debit|Standing\s*Instruction)\b", clean_block):
@@ -225,6 +229,9 @@ def extract_premium_mode(pdf_text: str) -> str:
         cash_check_block = re.sub(r"(?i)(?:other\s+than\s+cash|paid\s+in\s+cash|cashless)", "", clean_block)
         if re.search(r"(?i)\bCash\b", cash_check_block):
             return "CASH"
+
+    if re.search(r"(?i)Document\s+generated\s+by\s+(?:QR_RENEWAL|ONLINE|PORTAL|WEB)", pdf_text):
+        return "ONLINE"
 
     return ""
 
