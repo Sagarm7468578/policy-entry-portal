@@ -2,7 +2,6 @@ import base64
 import os
 import pandas as pd
 import streamlit as st
-from portal.bug_highlighter import render_preview_table
 from health_parser import (
     OUTPUT_COLUMNS,
     project_rows_to_schema,
@@ -24,6 +23,7 @@ from portal.state import (
     get_active_accounts_df,
     save_and_record_batch,
 )
+from portal.bug_highlighter import render_preview_table
 
 
 def _on_select_all_pdfs_change():
@@ -418,6 +418,7 @@ def _render_results_and_history(ctx, active_headers):
                 columns=res.get("batch_columns") or active_headers,
                 batch_id=f"{res['round_no']}_{res['timestamp']}",
                 enable_highlighter=is_admin_user(),
+                debug_list=res.get("debug_list", []),
             )
 
     if not is_mode3 and st.session_state.batch_history:
