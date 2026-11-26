@@ -10,6 +10,10 @@ from health_parsers.plans.star_medi_classic_individual import (
     is_star_medi_classic_individual,
     parse_star_medi_classic_individual,
 )
+from health_parsers.plans.national_parivar_mediclaim import (
+    is_national_parivar_mediclaim,
+    parse_national_parivar_mediclaim,
+)
 
 # Plan-wise isolated parsers (main company parsers remain untouched)
 PLAN_PARSERS = {
@@ -19,6 +23,9 @@ PLAN_PARSERS = {
     "STAR HEALTH": [
         (is_star_health_assure, parse_star_health_assure),
         (is_star_medi_classic_individual, parse_star_medi_classic_individual),
+    ],
+    "NATIONAL": [
+        (is_national_parivar_mediclaim, parse_national_parivar_mediclaim),
     ],
 }
 
