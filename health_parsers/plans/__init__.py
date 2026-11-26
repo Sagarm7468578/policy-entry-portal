@@ -15,11 +15,13 @@ _PLAN_SPECS = [
     ("STAR HEALTH", "star_comprehensive", "is_star_comprehensive", "parse_star_comprehensive"),
     ("STAR HEALTH", "star_arogya_sanjeevani", "is_star_arogya_sanjeevani", "parse_star_arogya_sanjeevani"),
     ("STAR HEALTH", "star_critical_illness", "is_star_critical_illness", "parse_star_critical_illness"),
+    ("STAR HEALTH", "star_family_accident_care", "is_star_family_accident_care", "parse_star_family_accident_care"),
     ("NATIONAL", "national_parivar_mediclaim", "is_national_parivar_mediclaim", "parse_national_parivar_mediclaim"),
     ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
     ("MANIPAL CIGNA", "manipal_cigna_sarvah", "is_manipal_cigna_sarvah", "parse_manipal_cigna_sarvah"),
     ("ADITYA BIRLA", "aditya_birla_activ_one", "is_aditya_birla_activ_one", "parse_aditya_birla_activ_one"),
     ("IFFCO TOKIO", "iffco_tokio_fhp", "is_iffco_tokio_fhp", "parse_iffco_tokio_fhp"),
+    ("TATA AIG", "tata_aig_travel", "is_tata_aig_travel", "parse_tata_aig_travel"),
 ]
 
 PLAN_PARSERS = {}
