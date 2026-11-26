@@ -177,10 +177,10 @@ def render_mode3_workspace(ctx):
             row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
 
             skip_reason = get_skip_pdf_reason(fname, is_ok, err_msg, debug_info)
-if skip_reason:
-    error_files.append((fname, pdf_bytes))
-    error_details.append({"File Name": fname, "Reason": skip_reason})
-    error_track_items.append({"id": fid, "name": fname})
+            if skip_reason:
+                error_files.append((fname, pdf_bytes))
+                error_details.append({"File Name": fname, "Reason": skip_reason})
+                error_track_items.append({"id": fid, "name": fname})
             else:
                 debug_list.append(debug_info)
                 extracted_rows.append(row_dict)
