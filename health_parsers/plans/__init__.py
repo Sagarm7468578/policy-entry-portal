@@ -1,96 +1,36 @@
-from health_parsers.plans.hdfc_sarv_suraksha_plus_group import (
-    is_hdfc_sarv_suraksha_plus_group,
-    parse_hdfc_sarv_suraksha_plus_group,
-)
-from health_parsers.plans.hdfc_optima_restore import (
-    is_hdfc_optima_restore,
-    parse_hdfc_optima_restore,
-)
-from health_parsers.plans.hdfc_koti_suraksha import (
-    is_hdfc_koti_suraksha,
-    parse_hdfc_koti_suraksha,
-)
-from health_parsers.plans.hdfc_individual_pa import (
-    is_hdfc_individual_pa,
-    parse_hdfc_individual_pa,
-)
-from health_parsers.plans.star_health_assure import (
-    is_star_health_assure,
-    parse_star_health_assure,
-)
-from health_parsers.plans.star_medi_classic_individual import (
-    is_star_medi_classic_individual,
-    parse_star_medi_classic_individual,
-)
-from health_parsers.plans.star_super_surplus import (
-    is_star_super_surplus,
-    parse_star_super_surplus,
-)
-from health_parsers.plans.star_super_star import (
-    is_star_super_star,
-    parse_star_super_star,
-)
-from health_parsers.plans.star_women_care import (
-    is_star_women_care,
-    parse_star_women_care,
-)
-from health_parsers.plans.star_comprehensive import (
-    is_star_comprehensive,
-    parse_star_comprehensive,
-)
-from health_parsers.plans.national_parivar_mediclaim import (
-    is_national_parivar_mediclaim,
-    parse_national_parivar_mediclaim,
-)
-from health_parsers.plans.new_india_cpa_vehicle import (
-    is_new_india_cpa_vehicle,
-    parse_new_india_cpa_vehicle,
-)
-from health_parsers.plans.manipal_cigna_sarvah import (
-    is_manipal_cigna_sarvah,
-    parse_manipal_cigna_sarvah,
-)
-from health_parsers.plans.aditya_birla_activ_one import (
-    is_aditya_birla_activ_one,
-    parse_aditya_birla_activ_one,
-)
-from health_parsers.plans.iffco_tokio_fhp import (
-    is_iffco_tokio_fhp,
-    parse_iffco_tokio_fhp,
-)
+import importlib
 
-# Plan-wise isolated parsers (main company parsers remain untouched)
-PLAN_PARSERS = {
-    "HDFC ERGO": [
-        (is_hdfc_sarv_suraksha_plus_group, parse_hdfc_sarv_suraksha_plus_group),
-        (is_hdfc_optima_restore, parse_hdfc_optima_restore),
-        (is_hdfc_koti_suraksha, parse_hdfc_koti_suraksha),
-        (is_hdfc_individual_pa, parse_hdfc_individual_pa),
-    ],
-    "STAR HEALTH": [
-        (is_star_health_assure, parse_star_health_assure),
-        (is_star_medi_classic_individual, parse_star_medi_classic_individual),
-        (is_star_super_surplus, parse_star_super_surplus),
-        (is_star_super_star, parse_star_super_star),
-        (is_star_women_care, parse_star_women_care),
-        (is_star_comprehensive, parse_star_comprehensive),
-    ],
-    "NATIONAL": [
-        (is_national_parivar_mediclaim, parse_national_parivar_mediclaim),
-    ],
-    "NEW INDIA": [
-        (is_new_india_cpa_vehicle, parse_new_india_cpa_vehicle),
-    ],
-    "MANIPAL CIGNA": [
-        (is_manipal_cigna_sarvah, parse_manipal_cigna_sarvah),
-    ],
-    "ADITYA BIRLA": [
-        (is_aditya_birla_activ_one, parse_aditya_birla_activ_one),
-    ],
-    "IFFCO TOKIO": [
-        (is_iffco_tokio_fhp, parse_iffco_tokio_fhp),
-    ],
-}
+# Registry: (company_name, module_name, detector_fn_name, parser_fn_name)
+_PLAN_SPECS = [
+    ("HDFC ERGO", "hdfc_sarv_suraksha_plus_group", "is_hdfc_sarv_suraksha_plus_group", "parse_hdfc_sarv_suraksha_plus_group"),
+    ("HDFC ERGO", "hdfc_optima_restore", "is_hdfc_optima_restore", "parse_hdfc_optima_restore"),
+    ("HDFC ERGO", "hdfc_koti_suraksha", "is_hdfc_koti_suraksha", "parse_hdfc_koti_suraksha"),
+    ("HDFC ERGO", "hdfc_individual_pa", "is_hdfc_individual_pa", "parse_hdfc_individual_pa"),
+    ("STAR HEALTH", "star_health_assure", "is_star_health_assure", "parse_star_health_assure"),
+    ("STAR HEALTH", "star_medi_classic_individual", "is_star_medi_classic_individual", "parse_star_medi_classic_individual"),
+    ("STAR HEALTH", "star_super_surplus", "is_star_super_surplus", "parse_star_super_surplus"),
+    ("STAR HEALTH", "star_super_star", "is_star_super_star", "parse_star_super_star"),
+    ("STAR HEALTH", "star_women_care", "is_star_women_care", "parse_star_women_care"),
+    ("STAR HEALTH", "star_comprehensive", "is_star_comprehensive", "parse_star_comprehensive"),
+    ("NATIONAL", "national_parivar_mediclaim", "is_national_parivar_mediclaim", "parse_national_parivar_mediclaim"),
+    ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
+    ("MANIPAL CIGNA", "manipal_cigna_sarvah", "is_manipal_cigna_sarvah", "parse_manipal_cigna_sarvah"),
+    ("ADITYA BIRLA", "aditya_birla_activ_one", "is_aditya_birla_activ_one", "parse_aditya_birla_activ_one"),
+    ("IFFCO TOKIO", "iffco_tokio_fhp", "is_iffco_tokio_fhp", "parse_iffco_tokio_fhp"),
+]
+
+PLAN_PARSERS = {}
+PLAN_LOAD_ERRORS = {}
+
+for _company, _mod_name, _det_name, _prs_name in _PLAN_SPECS:
+    try:
+        _mod = importlib.import_module(f"health_parsers.plans.{_mod_name}")
+        _det = getattr(_mod, _det_name)
+        _prs = getattr(_mod, _prs_name)
+        PLAN_PARSERS.setdefault(_company, []).append((_det, _prs))
+    except Exception as _e:
+        # Isolate any single missing/broken plan file so other companies & PDFs NEVER crash
+        PLAN_LOAD_ERRORS[_mod_name] = str(_e)
 
 
 def dispatch_plan_parser(company: str, pdf_text: str):
