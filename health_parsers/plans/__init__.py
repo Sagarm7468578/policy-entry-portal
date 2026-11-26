@@ -1,4 +1,5 @@
 import importlib
+from health_parsers.plans.verified_defaults import apply_verified_defaults
 
 # Registry: (company_name, module_name, detector_fn_name, parser_fn_name)
 _PLAN_SPECS = [
@@ -18,6 +19,7 @@ _PLAN_SPECS = [
     ("STAR HEALTH", "star_family_accident_care", "is_star_family_accident_care", "parse_star_family_accident_care"),
     ("STAR HEALTH", "star_senior_citizens_red_carpet", "is_star_senior_citizens_red_carpet", "parse_star_senior_citizens_red_carpet"),
     ("NIVA BUPA", "niva_bupa_reassure3", "is_niva_bupa_reassure3", "parse_niva_bupa_reassure3"),
+    ("NIVA BUPA", "niva_bupa_reassure2", "is_niva_bupa_reassure2", "parse_niva_bupa_reassure2"),
     ("NATIONAL", "national_parivar_mediclaim", "is_national_parivar_mediclaim", "parse_national_parivar_mediclaim"),
     ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
     ("MANIPAL CIGNA", "manipal_cigna_sarvah", "is_manipal_cigna_sarvah", "parse_manipal_cigna_sarvah"),
@@ -41,8 +43,9 @@ for _company, _mod_name, _det_name, _prs_name in _PLAN_SPECS:
 
 
 def dispatch_plan_parser(company: str, pdf_text: str):
-    """Runs a dedicated plan parser if matched; otherwise falls back to main company parser."""
+    """Runs a dedicated plan parser if matched, then applies verified post-rules (Auto-PYP, FRESH, FILL MANUAL)."""
     for detector_fn, parser_fn in PLAN_PARSERS.get(company, []):
         if detector_fn(pdf_text):
-            return parser_fn(pdf_text)
+            extracted = parser_fn(pdf_text)
+            return apply_verified_defaults(company, extracted, pdf_text)
     return None
