@@ -203,7 +203,7 @@ def extract_premium_mode(pdf_text: str) -> str:
         )
 
         if re.search(
-            r"(?i)\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU|Payment\s*Gateway|Gateway|BizDirect|OPS[A-Z0-9]{8,}|EASI\d{8,}|QR_RENEWAL)\b",
+            r"(?i)(?:\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU|Payment\s*Gateway|Gateway|BizDirect|OPS[A-Z0-9]{8,}|EASI\d{8,}|QR_RENEWAL)\b|PG_[A-Z0-9_]+)",
             clean_block,
         ):
             return "ONLINE"
@@ -213,7 +213,7 @@ def extract_premium_mode(pdf_text: str) -> str:
 
         if re.search(r"(?i)Instrument\s*(?:Details|No\.?|Number)", clean_block):
             if re.search(
-                r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,120}?(?<![A-Za-z0-9/\-])(\d{12,24})(?![A-Za-z0-9/\-])",
+                r"(?i)Instrument\s*(?:Details|No\.?|Number)[\s\S]{0,120}?(?<![A-Za-z0-9/\-])(\d{10,24})(?![A-Za-z0-9/\-])",
                 clean_block,
             ):
                 return "ONLINE"
