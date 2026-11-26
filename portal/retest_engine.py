@@ -1,4 +1,5 @@
 import importlib
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 import streamlit as st
@@ -20,6 +21,33 @@ def is_scanned_error(is_ok: bool, err_msg: str) -> bool:
         return False
     low = str(err_msg or "").lower()
     return ("scanned" in low) or ("image pdf" in low)
+
+
+def get_skip_pdf_reason(fname: str, is_ok: bool, err_msg: str, debug_info: dict = None) -> str:
+    """
+    Returns a skip reason if a PDF should be excluded from Excel & Preview Mode:
+    1. Scanned / Image-only PDFs
+    2. Annexure / Member-List-only PDFs (no premium or policy period — not a Policy Schedule)
+    """
+    if is_scanned_error(is_ok, err_msg):
+        return err_msg or "Scanned / Image PDF (text readable nahi hai)"
+
+    raw_text = str((debug_info or {}).get("raw_text") or "")
+    has_annex_marker = bool(
+        re.search(r"(?i)annexure\s+attached\s+to\s+and\s+forming\s+(?:a\s+)?part\s+of", raw_text)
+        or re.search(r"(?i)\bannexure\b", str(fname or ""))
+    )
+    if has_annex_marker:
+        has_schedule_fields = bool(
+            re.search(
+                r"(?i)(?:Total\s*Premium|Gross\s*Premium|Net\s*Premium|Period\s*of\s*Insurance|Policy\s*Period|Commencement\s*Date)",
+                raw_text,
+            )
+        )
+        if not has_schedule_fields:
+            return "Annexure / Member List PDF (Not a Policy Schedule — Skipped)"
+
+    return ""
 
 
 def reload_health_parsers():
