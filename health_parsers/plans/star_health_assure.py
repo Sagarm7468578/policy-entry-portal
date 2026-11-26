@@ -5,6 +5,7 @@ from health_parsers.common import (
     fmt_date,
     clean_amount,
     clean_person_name,
+    shorten_agency_name,
 )
 
 
@@ -17,7 +18,6 @@ def is_star_health_assure(pdf_text: str) -> bool:
 
 
 def _extract_star_assure_agency(pdf_text: str) -> str:
-    # Restrict search to Schedule Intermediary block (avoids Page 1 letter "as indicated by you")
     m_block = re.search(
         r"(?i)Intermediary[\r\n\s]*Code([\s\S]{0,1400}?)(?:Total\s*Premium|PERIOD\s*OF\s*INSURANCE)",
         pdf_text,
@@ -31,7 +31,7 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
         "first", "policy", "name", "optional", "cover", "loading", "discount",
         "premium", "phone", "no", "cgst", "sgst", "igst", "stamp", "duty", "total", "rs",
         "e-mail", "email", "mail", "id", "tenth", "ninth", "eighth", "seventh", "sixth",
-        "fifth", "fourth", "third", "second", "fresh", "new",
+        "fifth", "fourth", "third", "second", "eleventh", "twelfth", "fresh", "new",
     }
 
     lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in block.splitlines()]
@@ -51,7 +51,6 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
                 break
         return extra
 
-    # Priority 1: Salutation-prefixed name (supports 1-line "Mr.CHAYAN LADDHA" & 2-line "Mr.SUMIT\nMAHESHWARI")
     for idx, ln in enumerate(lines):
         m_sal = re.match(
             r"(?i)^:?\s*(?:MRS|MISS|MR|MS|DR|SMT|SHRI|M/S)(?:\.[ \t]*|[ \t]+)([A-Za-z][A-Za-z .&/\-]{1,60})$",
@@ -61,9 +60,8 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
             parts = [m_sal.group(1).strip()] + collect_continuation(idx)
             val = clean_person_name(" ".join(parts))
             if val:
-                return val
+                return shorten_agency_name(val)
 
-    # Priority 2: Direct "Intermediary Name : ..." or "Agent Name : ..."
     m_direct = re.search(
         r"(?i)(?:Intermediary\s*Name|Agent\s*Name)[ \t]*[:\-][ \t]*([^\r\n]{3,65})",
         block,
@@ -71,9 +69,8 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
     if m_direct:
         cand = clean_person_name(m_direct.group(1))
         if cand and not re.search(r"(?i)indicated\s+by\s+you", cand):
-            return cand
+            return shorten_agency_name(cand)
 
-    # Priority 3: Clean alphabetic name line(s) inside block (without salutation)
     for idx, ln in enumerate(lines):
         s = ln.strip(" :.-_")
         if len(s) < 3 or re.search(r"[\d@/]", s):
@@ -83,13 +80,45 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
             continue
         if re.fullmatch(r"[A-Za-z .&\-]{3,60}", s):
             parts = [s] + collect_continuation(idx)
-            return clean_person_name(" ".join(parts))
+            return shorten_agency_name(clean_person_name(" ".join(parts)))
+
+    return ""
+
+
+def _extract_star_assure_sum_insured(pdf_text: str) -> str:
+    # Priority 1: Floater schedule explicit label
+    m_si = re.search(
+        r"(?i)Basic(?:\s+Floater)?\s+Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
+        pdf_text,
+    )
+    if m_si:
+        return clean_amount(m_si.group(1))
+
+    # Priority 2: Individual Assure policy table (stops before Opted Covers so Personal Accident SI is ignored)
+    m_tbl = re.search(
+        r"(?i)Details\s+of\s+Insured\s+Persons\s*:?([\s\S]{0,1200}?)(?:Pre\s+Existing\s+Disease|Opted\s+Covers|Nominee\s+Details|$)",
+        pdf_text,
+    )
+    if m_tbl:
+        sec = m_tbl.group(1)
+        joined = re.sub(r"(\d{1,2}(?:,\d{2})*,\d{1,2})\s*[\r\n]+\s*(\d{1,2})\b", r"\1\2", sec)
+        amts = [clean_amount(a) for a in re.findall(r"\b\d{1,2}(?:,\d{2})*,\d{3}\b", joined)]
+        amts = [a for a in amts if a.isdigit() and int(a) >= 100000]
+        if amts:
+            return amts[0]
+
+    # Priority 3: Generic labeled Sum Insured
+    m_gen = re.search(
+        r"(?i)Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
+        pdf_text,
+    )
+    if m_gen:
+        return clean_amount(m_gen.group(1))
 
     return ""
 
 
 def _extract_star_assure_payment_mode(pdf_text: str) -> str:
-    # Star Health Section 80D certificate: "Payment received by Cheque / Payment Gateway / Online / Cash ..."
     m_rec = re.search(r"(?i)Payment\s+received\s+by\s+([^\r\n]{2,60})", pdf_text)
     if m_rec:
         seg = m_rec.group(1)
@@ -108,7 +137,6 @@ def _extract_star_assure_payment_mode(pdf_text: str) -> str:
 
 
 def _extract_star_assure_dob(pdf_text: str) -> str:
-    # Prefer DOBs directly from Insured Persons / Customer Identity Card section
     dobs = []
     for m_sec in re.finditer(
         r"(?i)(?:Details\s+of\s+Insured\s+Persons|Customer\s+Identity\s+Card)([\s\S]{0,1600})",
@@ -134,7 +162,6 @@ def parse_star_health_assure(pdf_text: str) -> dict:
     data["plan_name"] = "STAR HEALTH ASSURE"
     data["sub_type"] = "MEDICLAIM"
 
-    # 1. Policy Number
     for pat in [
         r"(?i)Renewal\s*Endorsement\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
         r"(?i)Attached\s+to\s+and\s+forming\s+part\s+of\s+Policy\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
@@ -146,7 +173,6 @@ def parse_star_health_assure(pdf_text: str) -> dict:
             data["policy_number"] = m.group(1).strip()
             break
 
-    # 2. Client Name (strictly single-line; never picks "Cust CKYC No" from next line)
     for pat in [
         r"(?i)Customer\s*Name[ \t]*[:\-][ \t]*([^\r\n]{3,80})",
         r"(?i)Proposer\s*Name[ \t]*[\r\n]*[ \t]*[:\-][ \t]*[\r\n]*[ \t]*([^\r\n]{3,80})",
@@ -160,7 +186,6 @@ def parse_star_health_assure(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
-    # 3. PYP Number (Previous Policy Number in renewal clause)
     m_pyp = re.search(
         r"(?i)towards\s+renewal\s+premium\s+of\s+policy\s*number\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{8,30})",
         pdf_text,
@@ -168,10 +193,8 @@ def parse_star_health_assure(pdf_text: str) -> dict:
     if m_pyp:
         data["pyp_number"] = m_pyp.group(1).strip().rstrip(",.")
 
-    # 4. Agency / Intermediary Name
     data["agency"] = _extract_star_assure_agency(pdf_text)
 
-    # 5. Inception Date & Expiry Date
     date_tok = r"(\d{2}[/\-][A-Za-z0-9]{2,3}[/\-]\d{2,4})"
     m_period = re.search(
         rf"(?i)PERIOD\s*OF\s*INSURANCE[\s\S]{{0,120}}?From\s*[:\-]?\s*{date_tok}[\s\S]{{0,80}}?To[\s\S]{{0,40}}?(?:Midnight\s*Of\s*)?{date_tok}",
@@ -197,20 +220,8 @@ def parse_star_health_assure(pdf_text: str) -> dict:
         if m_vt:
             data["end_dt"] = parse_any_date(m_vt.group(1))
 
-    # 6. Sum Insured
-    m_si = re.search(
-        r"(?i)Basic(?:\s+Floater)?\s+Sum\s*Insured\s*[:\-]?\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        pdf_text,
-    )
-    if not m_si:
-        m_si = re.search(
-            r"(?i)Sum\s*Insured\s*[:\-]\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-            pdf_text,
-        )
-    if m_si:
-        data["sum_insured"] = clean_amount(m_si.group(1))
+    data["sum_insured"] = _extract_star_assure_sum_insured(pdf_text)
 
-    # 7. Total Premium
     for pat in [
         r"(?i)Total\s*Premium\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         r"(?i)Total\s*Invoice\s*Value\s*\(in\s*Figures\)\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
@@ -221,10 +232,7 @@ def parse_star_health_assure(pdf_text: str) -> dict:
             data["premium"] = clean_amount(m_p.group(1))
             break
 
-    # 8. Premium Mode
     data["premium_mode"] = _extract_star_assure_payment_mode(pdf_text)
-
-    # 9. DOB (Oldest Insured Person)
     data["dob"] = _extract_star_assure_dob(pdf_text)
 
     return data
