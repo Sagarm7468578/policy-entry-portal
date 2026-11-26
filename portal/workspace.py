@@ -2,6 +2,7 @@ import base64
 import os
 import pandas as pd
 import streamlit as st
+from portal.bug_highlighter import render_preview_table
 from health_parser import (
     OUTPUT_COLUMNS,
     project_rows_to_schema,
