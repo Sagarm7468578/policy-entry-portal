@@ -151,6 +151,7 @@ def clean_person_name(name: str) -> str:
     name = re.sub(r"\s+\d{4,}.*$", "", name)
     name = re.sub(r"(?i)^\s*((?:MRS|MISS|MR|MS|DR|SMT|SHRI|MASTER|MAST|M/S)(?:\.|\b)\s*)+", "", name)
     name = re.sub(r"\s+", " ", name).strip(" .,:-_")
+    name = re.sub(r"(?<=[A-Za-z])\.(?=[A-Za-z])", " ", name)
     return name.upper()
 
 
