@@ -12,6 +12,7 @@ def is_star_comprehensive(pdf_text: str) -> bool:
     return bool(
         re.search(r"(?i)Star\s+Comprehensive\s+(?:Insurance\s+Policy|Revised)", pdf_text)
         or re.search(r"(?i)SHAHLIP25037V", pdf_text)
+        or re.search(r"(?i)SHAHLIP26044V", pdf_text)
     )
 
 
@@ -25,9 +26,10 @@ def _extract_comprehensive_agency(pdf_text: str) -> str:
         return ""
     stop_words = {
         "intermediary", "code", "renewal", "year", "collection", "date", "inception",
-        "first", "policy", "name", "optional", "cover", "loading", "discount",
-        "premium", "phone", "no", "cgst", "sgst", "igst", "stamp", "duty", "total", "rs",
-        "e-mail", "email", "mail", "id",
+        "first", "policy", "category", "name", "optional", "cover", "loading", "discount",
+        "premium", "base", "product", "phone", "no", "cgst", "sgst", "igst", "stamp",
+        "duty", "total", "rs", "e-mail", "email", "mail", "id", "sixth", "fifth",
+        "fourth", "third", "second", "seventh", "eighth", "ninth", "tenth", "new", "fresh",
     }
     lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in block.splitlines()]
     for idx, ln in enumerate(lines):
@@ -57,18 +59,20 @@ def parse_star_comprehensive(pdf_text: str) -> dict:
     data["plan_name"] = "STAR COMPREHENSIVE"
     data["sub_type"] = "MEDICLAIM"
 
+    # 1. Policy Number
     for pat in [
         r"(?i)Renewal\s*Endorsement\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
+        r"(?i)Policy\s*No\.?\s*[\r\n\s]*[:\-]\s*[\r\n\s]*([A-Z0-9/\-]{8,30})",
         r"(?i)Attached\s+to\s+and\s+forming\s+part\s+of\s+Policy\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
-        r"(?i)Policy\s*No\.?\s*[:\-]\s*([A-Z0-9/\-]{8,30})",
     ]:
         m = re.search(pat, pdf_text)
         if m:
             data["policy_number"] = m.group(1).strip()
             break
 
+    # 2. Client Name (supports same-line and next-line after Customer Name :)
     for pat in [
-        r"(?i)Customer\s*Name[ \t]*[:\-][ \t]*([^\r\n]{3,80})",
+        r"(?i)Customer\s*Name[ \t]*[:\-][ \t]*[\r\n]*[ \t]*([^\r\n]{3,80})",
         r"(?i)Proposer\s*Name[ \t]*[\r\n]*[ \t]*[:\-][ \t]*[\r\n]*[ \t]*([^\r\n]{3,80})",
         r"(?i)This\s+is\s+to\s+certify\s+that\s+([A-Za-z][A-Za-z .]{2,80}?)\s+has\s+paid",
     ]:
@@ -80,12 +84,22 @@ def parse_star_comprehensive(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
-    m_pyp = re.search(r"(?i)towards\s+renewal\s+premium\s+of\s+policy\s*number\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{8,30})", pdf_text)
-    if m_pyp:
-        data["pyp_number"] = m_pyp.group(1).strip().rstrip(",.")
+    # 3. Previous Policy Number (handles both "Previous Policy No\n: 9247..." and "towards renewal premium of policy number:")
+    for pat in [
+        r"(?i)Previous\s*Policy\s*No\.?[ \t]*[\r\n]*[ \t]*[:\-][ \t]*([^\r\n]{6,35})",
+        r"(?i)towards\s+renewal\s+premium\s+of\s+policy\s*number\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{8,30})",
+    ]:
+        m_pyp = re.search(pat, pdf_text)
+        if m_pyp:
+            cand_pyp = m_pyp.group(1).strip().rstrip(",.")
+            if re.search(r"\d{6,}", cand_pyp) and not re.search(r"(?i)\b(?:Customer|Proposer|Code)\b", cand_pyp):
+                data["pyp_number"] = cand_pyp
+                break
 
+    # 4. Agency
     data["agency"] = _extract_comprehensive_agency(pdf_text)
 
+    # 5. Inception Date & Expiry Date
     date_tok = r"(\d{2}[/\-][A-Za-z0-9]{2,3}[/\-]\d{2,4})"
     m_per = re.search(
         rf"(?i)Period\s*of\s*Insurance[\s\S]{{0,120}}?From\s*[:\-]?\s*{date_tok}[\s\S]{{0,80}}?To[\s\S]{{0,40}}?(?:Midnight\s*of\s*)?{date_tok}",
@@ -104,12 +118,18 @@ def parse_star_comprehensive(pdf_text: str) -> dict:
         if m_vt:
             data["end_dt"] = parse_any_date(m_vt.group(1))
 
-    # Sum Insured (Priority 1: Floater label; Priority 2: Individual table first comma-amount >= 1,00,000)
-    m_si_lbl = re.search(r"(?i)Basic(?:\s+Floater)?\s+Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)", pdf_text)
+    # 6. Sum Insured
+    m_si_lbl = re.search(
+        r"(?i)Basic(?:\s+Floater)?\s+Sum\s*Insured[ \t]*[:\-][\r\n \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
+        pdf_text,
+    )
     if m_si_lbl:
         data["sum_insured"] = clean_amount(m_si_lbl.group(1))
     else:
-        m_tbl = re.search(r"(?i)Attached\s+to\s+and\s+forming\s+part\s+of\s+Policy\s*No[\s\S]{0,1200}?(?:Pre\s+Existing\s+Disease|Nominee\s+Details|$)", pdf_text)
+        m_tbl = re.search(
+            r"(?i)Attached\s+to\s+and\s+forming\s+part\s+of\s+Policy\s*No[\s\S]{0,1200}?(?:Pre\s+Existing\s+Disease|Nominee\s+Details|$)",
+            pdf_text,
+        )
         if m_tbl:
             joined = re.sub(r"(\d{1,2}(?:,\d{2})*,\d{1,2})\s*[\r\n]+\s*(\d{1,2})\b", r"\1\2", m_tbl.group(0))
             amts = [clean_amount(a) for a in re.findall(r"\b\d{1,2}(?:,\d{2})*,\d{3}\b", joined)]
@@ -117,6 +137,7 @@ def parse_star_comprehensive(pdf_text: str) -> dict:
             if amts:
                 data["sum_insured"] = amts[0]
 
+    # 7. Total Premium
     for pat in [
         r"(?i)Total\s*Premium\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         r"(?i)Total\s*Invoice\s*Value\s*\(in\s*Figures\)\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
@@ -126,6 +147,7 @@ def parse_star_comprehensive(pdf_text: str) -> dict:
             data["premium"] = clean_amount(m_p.group(1))
             break
 
+    # 8. Premium Mode
     m_rec = re.search(r"(?i)Payment\s+received\s+by\s+([^\r\n]{2,60})", pdf_text)
     if m_rec:
         seg = m_rec.group(1)
@@ -136,6 +158,7 @@ def parse_star_comprehensive(pdf_text: str) -> dict:
         elif re.search(r"(?i)\bCash\b", seg):
             data["premium_mode"] = "CASH"
 
+    # 9. DOB
     dobs = []
     m_id = re.search(r"(?i)Customer\s+Identity\s+Card([\s\S]{0,1200})", pdf_text)
     if m_id:
