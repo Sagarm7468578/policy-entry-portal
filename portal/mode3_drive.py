@@ -13,7 +13,7 @@ from portal.state import (
     get_active_accounts_df,
     save_and_record_batch,
 )
-from portal.retest_engine import is_scanned_error, attach_retest_cache
+from portal.retest_engine import get_skip_pdf_reason, attach_retest_cache
 
 
 def _on_select_all_pdfs_change():
@@ -176,10 +176,11 @@ def render_mode3_workspace(ctx):
             pdf_bytes = base64.b64decode(dl_res["content_b64"])
             row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
 
-            if is_scanned_error(is_ok, err_msg):
-                error_files.append((fname, pdf_bytes))
-                error_details.append({"File Name": fname, "Reason": err_msg})
-                error_track_items.append({"id": fid, "name": fname})
+            skip_reason = get_skip_pdf_reason(fname, is_ok, err_msg, debug_info)
+if skip_reason:
+    error_files.append((fname, pdf_bytes))
+    error_details.append({"File Name": fname, "Reason": skip_reason})
+    error_track_items.append({"id": fid, "name": fname})
             else:
                 debug_list.append(debug_info)
                 extracted_rows.append(row_dict)
