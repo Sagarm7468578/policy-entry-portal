@@ -162,7 +162,7 @@ def _render_mode3_workspace(ctx, active_headers):
         st.success(f"📄 Total PDFs: **{len(all_drive_files)}**  |  🆕 Pending: **{len(new_or_retry_files)}**  |  ✅ Previously Entered: **{len(already_done_files)}**")
         include_done = st.checkbox(f"Include previously entered PDFs ({len(already_done_files)}) for reprocessing", value=True, key="include_done_m3")
     else:
-        st.success(f"📄 **{len(new_or_retry_files)} Pending PDFs** ready for processing (original files remain untouched)")
+        st.success(f"📄 **{len(new_or_retry_files)} Pending PDFs** ready for processing...")
 
     candidate_files = all_drive_files if include_done else new_or_retry_files
     if not candidate_files:
@@ -177,18 +177,18 @@ def _render_mode3_workspace(ctx, active_headers):
         st.session_state.drive_pdf_sel_ver += 1
 
     with st.expander(f"📋 Select Policy PDFs ({len(candidate_files)} available)", expanded=True):
-        st.checkbox("☑️ Select All PDFs (Checked = Select All | Unchecked = Clear All)", key="m3_select_all_cb", on_change=_on_select_all_pdfs_change)
+        st.checkbox("☑️ Select All PDFs For Entry", key="m3_select_all_cb", on_change=_on_select_all_pdfs_change)
         df_selectable = pd.DataFrame([
             {
                 "Select": st.session_state.drive_pdf_sel_default, "#": i + 1, "File Name": f["name"],
                 "Status": "✅ Entered" if f.get("last_status") == "DONE" else ("⚠️ Prev Error" if f.get("last_status") == "ERROR" else "🆕 New"),
-                "Size (KB)": f.get("size_kb", ""), "Modified": f.get("updated", ""),
+                "Modified": f.get("updated", ""),
             }
             for i, f in enumerate(candidate_files)
         ])
         edited_df = st.data_editor(
             df_selectable, use_container_width=True, hide_index=True,
-            disabled=["#", "File Name", "Status", "Size (KB)", "Modified"],
+            disabled=["#", "File Name", "Status", "Modified"],
             column_config={"Select": st.column_config.CheckboxColumn("Select", default=True, width="small"), "#": st.column_config.NumberColumn("#", width="small")},
             key=f"m3_pdf_editor_{st.session_state.drive_pdf_sel_ver}",
         )
@@ -201,7 +201,6 @@ def _render_mode3_workspace(ctx, active_headers):
         if not active_m3_excel_url:
             st.warning("Please link your Google Drive `.xlsx` file first via **Left Sidebar → Mode 3 Drive Excel**.")
             return
-        # Clear previous round preview so only this current round's entries appear
         st.session_state.pop("last_results", None)
 
         master_df = get_active_master_df(ctx["manual_master_file"])
@@ -226,7 +225,6 @@ def _render_mode3_workspace(ctx, active_headers):
             row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
 
             if _is_scanned_error(is_ok, err_msg):
-                # Scanned / Image PDFs stay ONLY in the top Error list (never saved to Excel or shown in Preview Mode)
                 error_files.append((fname, pdf_bytes))
                 error_details.append({"File Name": fname, "Reason": err_msg})
                 error_track_items.append({"id": fid, "name": fname})
@@ -357,7 +355,7 @@ def _render_results_and_history(ctx, active_headers):
         if res.get("skipped_count", 0) > 0:
             st.info(f"ℹ️ Skipped {res['skipped_count']} duplicate policies already present in the sheet.")
 
-        st.subheader(f"⚡ Latest Batch #{res['round_no']} [{res.get('mode_used', 'Mode 1')}] ({res['time_display']})")
+        st.subheader(f"⚡ Latest Batch #{res['round_no']} ({res['time_display']})")
         m1, m2, m3 = st.columns(3)
         m1.metric("Total PDFs", res["total_count"])
         m2.metric("Completed ✅", res["done_count"])
@@ -392,7 +390,7 @@ def _render_results_and_history(ctx, active_headers):
             for b in st.session_state.batch_history:
                 c_info, c_xlsx, c_err = st.columns([2.5, 1.5, 1.5])
                 with c_info:
-                    st.markdown(f"**Batch #{b['round_no']} ({b.get('mode_used', 'Mode 1')})** — `{b['time_display']}`  \nTotal: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**")
+                    st.markdown(f"**Batch #{b['round_no']}** — `{b['time_display']}`  \nTotal: **{b['total_count']}** | Done: **{b['done_count']} ✅** | Error: **{b['error_count']} ❌**")
                 with c_xlsx:
                     if b.get("round_excel_bytes") and b.get("batch_rows"):
                         st.download_button(f"📊 Batch #{b['round_no']} Excel", data=b["round_excel_bytes"], file_name=f"Batch_{b['round_no']}_Health_Entries_{b['timestamp']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"hist_xlsx_{b['round_no']}_{b['timestamp']}")
