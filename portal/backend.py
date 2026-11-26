@@ -2,9 +2,12 @@ import base64
 import io
 import json
 import os
+import re
+from datetime import datetime
 import pandas as pd
 import requests
 import streamlit as st
+from health_parsers.common import IST, parse_any_date
 from health_parser import (
     MONTH_NAMES_BY_NUM,
     parse_renewal_list_pdf,
@@ -54,12 +57,21 @@ def load_user_sheet_settings(user_id):
         "motor_accounts_url": "", "motor_accounts_tab": "",
         "sme_accounts_url": "", "sme_accounts_tab": "",
         "health_renewal_folder_url": "", "motor_renewal_folder_url": "", "sme_renewal_folder_url": "",
+        "health_share_under60": "12", "health_share_60plus": "8",
     }
     res = call_backend({"action": "get_user_settings", "user_id": user_id})
     if res.get("success"):
+        defaults_non_empty = {
+            "fixed_sheet_tab": "Policy Entries",
+            "health_share_under60": "12",
+            "health_share_60plus": "8",
+        }
         for k in cfg:
             val = res.get(k, cfg[k])
-            cfg[k] = val if (val or k != "fixed_sheet_tab") else "Policy Entries"
+            if not val and k in defaults_non_empty:
+                cfg[k] = defaults_non_empty[k]
+            else:
+                cfg[k] = val
     return cfg
 
 
@@ -67,6 +79,46 @@ def save_user_sheet_settings(user_id, **kwargs):
     payload = {"action": "save_user_settings", "user_id": user_id}
     payload.update(kwargs)
     return call_backend(payload)
+
+
+def _parse_pct_int(val, default_val: int) -> int:
+    s = re.sub(r"[^0-9]", "", str(val or ""))
+    if s.isdigit():
+        n = int(s)
+        if 5 <= n <= 25:
+            return n
+    return default_val
+
+
+def apply_share_commission(extracted_rows, under60_pct="12", plus60_pct="8"):
+    """
+    Calculates 'Share %' and 'Share' (commission amount) from DOB + Premium
+    using each user's saved Under-60 and 60+ commission rates.
+    """
+    if not extracted_rows:
+        return
+    u60 = _parse_pct_int(under60_pct, 12)
+    p60 = _parse_pct_int(plus60_pct, 8)
+    today_dt = datetime.now(IST).replace(tzinfo=None)
+
+    for row in extracted_rows:
+        dob_dt = parse_any_date(row.get("DOB", ""))
+        if not dob_dt:
+            row["Share %"] = ""
+            row["Share"] = ""
+            continue
+
+        ref_dt = parse_any_date(row.get("Inception Date", "")) or today_dt
+        age = (ref_dt.year - dob_dt.year) - ((ref_dt.month, ref_dt.day) < (dob_dt.month, dob_dt.day))
+        rate = p60 if age >= 60 else u60
+        row["Share %"] = f"{rate}%"
+
+        prem_raw = str(row.get("Premium", "") or "").replace(",", "").strip()
+        try:
+            prem_val = float(prem_raw)
+            row["Share"] = str(int(round(prem_val * rate / 100.0)))
+        except ValueError:
+            row["Share"] = ""
 
 
 def fetch_linked_client_master(sheet_url, sheet_tab=""):
