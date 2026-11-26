@@ -21,10 +21,9 @@ def _align_debug_to_rows(rows: list, columns: list, debug_list: list) -> list:
             for d in debug_list
         ]
 
-    # If some Drive PDFs failed before parsing, filter download-failed entries first
     filtered = [
         d for d in debug_list
-        if d.get("raw_text") or "download" not in str(d.get("error_reason", "")).lower()
+        if d.get("raw_text") and "scanned" not in str(d.get("error_reason", "")).lower()
     ]
     if len(filtered) == len(rows):
         return [
@@ -35,7 +34,6 @@ def _align_debug_to_rows(rows: list, columns: list, debug_list: list) -> list:
             for d in filtered
         ]
 
-    # Fallback: match sequentially by Client Name (consuming each entry once for duplicate names)
     name_col = next((c for c in columns if c.strip().lower() == "client name"), columns[0] if columns else "")
     used = set()
     aligned = []
@@ -115,9 +113,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
     text-decoration: none;
   }}
   .btn:hover {{ background: #f1f5f9; }}
-  .btn.active-red {{ background: #fee2e2; border-color: #dc2626; color: #991b1b; box-shadow: 0 0 0 1px #dc2626; }}
-  .btn.active-yellow {{ background: #fef3c7; border-color: #d97706; color: #92400e; box-shadow: 0 0 0 1px #d97706; }}
-  .btn.active-green {{ background: #d1fae5; border-color: #059669; color: #065f46; box-shadow: 0 0 0 1px #059669; }}
+  .btn.active-red {{ background: #fee2e2; border-color: #dc2626; color: #991b1b; box-shadow: 0 0 0 1px #dc2626; cursor: default; }}
   .btn.active-filter {{ background: #1e40af; border-color: #1e40af; color: #ffffff; }}
   .btn.primary {{ background: #1f4e78; border-color: #1f4e78; color: #ffffff; }}
   .btn.primary:hover {{ background: #163a5a; }}
@@ -139,7 +135,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 
   .table-wrap {{
     width: 100%;
-    max-height: 490px;
+    max-height: 760px;
     overflow: auto;
     border: 1px solid #cbd5e1;
     border-radius: 8px;
@@ -216,54 +212,18 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
   }}
   td.empty-cell {{ color: #94a3b8; font-style: italic; }}
 
-  /* Highlight Colors */
   td.hl-red {{
     background: #fecaca !important;
     color: #7f1d1d !important;
     font-weight: 700;
     box-shadow: inset 0 0 0 2px #dc2626;
   }}
-  td.hl-yellow {{
-    background: #fde68a !important;
-    color: #78350f !important;
-    font-weight: 700;
-    box-shadow: inset 0 0 0 2px #d97706;
-  }}
-  td.hl-green {{
-    background: #a7f3d0 !important;
-    color: #064e3b !important;
-    font-weight: 700;
-    box-shadow: inset 0 0 0 2px #059669;
-  }}
-
-  .summary-box {{
-    margin-top: 8px;
-    display: none;
-    background: #fffbeb;
-    border: 1px solid #f59e0b;
-    border-radius: 8px;
-    padding: 8px 10px;
-  }}
-  .summary-box textarea {{
-    width: 100%;
-    height: 110px;
-    margin-top: 6px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    padding: 6px;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    resize: vertical;
-  }}
 </style>
 </head>
 <body>
   <div class="toolbar">
     <div class="tool-group">
-      <span style="font-weight:700;color:#475569;">Brush:</span>
-      <button id="btn-red" class="btn active-red" onclick="setColor('red')">🔴 Bug</button>
-      <button id="btn-yellow" class="btn" onclick="setColor('yellow')">🟡 Recheck</button>
-      <button id="btn-green" class="btn" onclick="setColor('green')">🟢 Fixed</button>
+      <span class="btn active-red">🔴 Bug</span>
     </div>
     <div class="sep"></div>
     <div class="tool-group">
@@ -280,17 +240,6 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
     <table id="preview-table"></table>
   </div>
 
-  <div id="summary-box" class="summary-box">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-      <strong id="summary-title" style="font-size:12.5px;color:#92400e;">Highlighted Bugs Summary:</strong>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <a id="dl-fallback-link" class="btn pack" style="display:none;" download>📥 Click here if download didn't start</a>
-        <button class="btn" onclick="document.getElementById('summary-box').style.display='none'">✖ Close</button>
-      </div>
-    </div>
-    <textarea id="summary-text" readonly></textarea>
-  </div>
-
 <script>
   const PAYLOAD = {data_json};
   const COLS = PAYLOAD.columns || [];
@@ -304,7 +253,6 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
   const planColName = COLS.find(c => c.trim().toLowerCase() === "plan name") || "";
   const clientColName = nameColIdx >= 0 ? COLS[nameColIdx] : (COLS[0] || "");
 
-  let activeColor = "red";
   let onlyHighlighted = false;
   let highlights = {{}};
   let lastBlobUrl = null;
@@ -329,14 +277,6 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
     setTimeout(() => {{ msg.style.display = "none"; }}, 2600);
   }}
 
-  function setColor(c) {{
-    activeColor = c;
-    ["red", "yellow", "green"].forEach(k => {{
-      const b = document.getElementById("btn-" + k);
-      b.className = "btn" + (k === c ? " active-" + k : "");
-    }});
-  }}
-
   function toggleFilter() {{
     onlyHighlighted = !onlyHighlighted;
     const bf = document.getElementById("btn-filter");
@@ -347,13 +287,12 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 
   function toggleCell(rIdx, cIdx, tdEl) {{
     const key = rIdx + "||" + cIdx;
-    if (highlights[key] === activeColor) {{
+    if (highlights[key]) {{
       delete highlights[key];
-      tdEl.classList.remove("hl-red", "hl-yellow", "hl-green");
+      tdEl.classList.remove("hl-red");
     }} else {{
-      highlights[key] = activeColor;
-      tdEl.classList.remove("hl-red", "hl-yellow", "hl-green");
-      tdEl.classList.add("hl-" + activeColor);
+      highlights[key] = "red";
+      tdEl.classList.add("hl-red");
     }}
     saveHighlights();
     updateBadge();
@@ -367,39 +306,29 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
     const bf = document.getElementById("btn-filter");
     bf.className = "btn";
     bf.textContent = "🔎 Only Highlighted Rows";
-    document.getElementById("summary-box").style.display = "none";
     renderTable();
   }}
 
   function updateBadge() {{
-    const keys = Object.keys(highlights);
-    const redCnt = keys.filter(k => highlights[k] === "red").length;
-    const yelCnt = keys.filter(k => highlights[k] === "yellow").length;
-    const grnCnt = keys.filter(k => highlights[k] === "green").length;
+    const cnt = Object.keys(highlights).length;
     const badge = document.getElementById("bug-count");
-    if (keys.length === 0) {{
+    if (cnt === 0) {{
       badge.textContent = "0 Highlighted";
       badge.className = "badge";
     }} else {{
-      const parts = [];
-      if (redCnt) parts.push("🔴 " + redCnt);
-      if (yelCnt) parts.push("🟡 " + yelCnt);
-      if (grnCnt) parts.push("🟢 " + grnCnt);
-      badge.textContent = parts.join(" | ");
-      badge.className = "badge" + (redCnt ? " has-bugs" : "");
+      badge.textContent = "🔴 " + cnt + " Highlighted";
+      badge.className = "badge has-bugs";
     }}
   }}
 
   function collectHighlightedByRow() {{
     const byRow = {{}};
     Object.keys(highlights).forEach(k => {{
-      const color = highlights[k];
-      if (color === "green") return;
       const [rStr, cStr] = k.split("||");
       const rIdx = parseInt(rStr, 10);
       const cIdx = parseInt(cStr, 10);
       if (!byRow[rIdx]) byRow[rIdx] = [];
-      byRow[rIdx].push({{ col: COLS[cIdx], val: ROWS[rIdx][COLS[cIdx]] || "[BLANK]", color }});
+      byRow[rIdx].push({{ col: COLS[cIdx], val: ROWS[rIdx][COLS[cIdx]] || "[BLANK]" }});
     }});
     const rowIndices = Object.keys(byRow).map(Number).sort((a, b) => a - b);
     return {{ byRow, rowIndices }};
@@ -415,8 +344,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
       const meta = [comp, plan].filter(Boolean).join(" | ");
       out.push((i + 1) + ". " + cname + (meta ? " (" + meta + ")" : ""));
       byRow[rIdx].forEach(item => {{
-        const tag = item.color === "red" ? "BUG" : "CHECK";
-        out.push("   - [" + tag + "] " + item.col + ': "' + item.val + '"');
+        out.push('   - [BUG] ' + item.col + ': "' + item.val + '"');
       }});
     }});
     return out.join("\\n");
@@ -452,8 +380,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
       lines.push("PDF FILE     : " + fname);
       lines.push("HIGHLIGHTED BUGS:");
       byRow[rIdx].forEach(item => {{
-        const tag = item.color === "red" ? "BUG" : "CHECK";
-        lines.push("  - [" + tag + "] " + item.col + ': "' + item.val + '"');
+        lines.push('  - [BUG] ' + item.col + ': "' + item.val + '"');
       }});
       lines.push("");
       lines.push("EXTRACTED ROW SNAPSHOT:");
@@ -473,12 +400,11 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
   function downloadBugPack() {{
     const {{ byRow, rowIndices }} = collectHighlightedByRow();
     if (rowIndices.length === 0) {{
-      alert("Please click at least one cell with 🔴 Bug or 🟡 Recheck first.");
+      alert("Please click at least one cell to highlight a bug first.");
       return;
     }}
 
     const packText = buildFullBugPackText(byRow, rowIndices);
-    const summaryTxt = buildSummaryText(byRow, rowIndices);
     const filename = "BUG_PACK_" + rowIndices.length + "_ENTRIES_" + BATCH_ID + ".txt";
 
     if (lastBlobUrl) {{
@@ -494,44 +420,32 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
     a.click();
     document.body.removeChild(a);
 
-    const box = document.getElementById("summary-box");
-    const ta = document.getElementById("summary-text");
-    const title = document.getElementById("summary-title");
-    const fbLink = document.getElementById("dl-fallback-link");
-    title.textContent = "✅ Bug Pack Ready (" + rowIndices.length + " Entries + Full PDF Texts) — Attach the downloaded .txt file in chat:";
-    ta.value = summaryTxt;
-    fbLink.href = lastBlobUrl;
-    fbLink.download = filename;
-    fbLink.style.display = "inline-flex";
-    box.style.display = "block";
-    showStatus("✅ Downloaded " + filename);
+    showStatus("✅ Downloaded (" + rowIndices.length + " entries)");
   }}
 
   function copyBugList() {{
     const {{ byRow, rowIndices }} = collectHighlightedByRow();
     if (rowIndices.length === 0) {{
-      alert("Please click at least one cell with 🔴 Bug or 🟡 Recheck first.");
+      alert("Please click at least one cell to highlight a bug first.");
       return;
     }}
     const txt = buildSummaryText(byRow, rowIndices);
-    const box = document.getElementById("summary-box");
-    const ta = document.getElementById("summary-text");
-    const title = document.getElementById("summary-title");
-    const fbLink = document.getElementById("dl-fallback-link");
-    title.textContent = "Highlighted Bugs Summary (Ready to paste in chat):";
-    fbLink.style.display = "none";
-    ta.value = txt;
-    box.style.display = "block";
-
     if (navigator.clipboard && navigator.clipboard.writeText) {{
-      navigator.clipboard.writeText(txt).then(() => showStatus("✅ Copied!")).catch(() => {{
-        ta.select();
-        try {{ document.execCommand("copy"); showStatus("✅ Copied!"); }} catch (e) {{}}
-      }});
+      navigator.clipboard.writeText(txt).then(() => showStatus("✅ Copied!")).catch(() => fallbackCopy(txt));
     }} else {{
-      ta.select();
-      try {{ document.execCommand("copy"); showStatus("✅ Copied!"); }} catch (e) {{}}
+      fallbackCopy(txt);
     }}
+  }}
+
+  function fallbackCopy(txt) {{
+    const ta = document.createElement("textarea");
+    ta.value = txt;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {{ document.execCommand("copy"); showStatus("✅ Copied!"); }} catch (e) {{}}
+    document.body.removeChild(ta);
   }}
 
   function rowHasHighlight(rIdx) {{
@@ -581,8 +495,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
         if (!val) td.classList.add("empty-cell");
         if (cIdx === nameColIdx) td.classList.add("sticky-name");
 
-        const hl = highlights[rIdx + "||" + cIdx];
-        if (hl) td.classList.add("hl-" + hl);
+        if (highlights[rIdx + "||" + cIdx]) td.classList.add("hl-red");
 
         td.addEventListener("click", () => toggleCell(rIdx, cIdx, td));
         tr.appendChild(td);
@@ -616,31 +529,30 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 
 def render_preview_table(rows: list, columns: list, batch_id: str, enable_highlighter: bool = False, debug_list: list = None):
     """
-    Renders Preview Mode table.
-    - Admin users get an interactive click-to-highlight cell table (Red/Yellow/Green),
-      Filter, Copy Summary, and 1-Click Download Bug Pack (.txt with Company, Plan, Bugs & Full Raw PDF Texts).
+    Renders Preview Mode table for the current round only.
+    - Admin users get a tall click-to-highlight red bug table + Filter + 1-Click Download Bug Pack (.txt).
     - Regular users see the clean standard Streamlit dataframe.
     """
     if not rows:
         return
 
     if not enable_highlighter:
-        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=620)
         return
 
     h_col1, h_col2 = st.columns([3, 1])
     with h_col1:
-        st.caption("🖍️ **Bug Highlight Mode:** Click any wrong cell (🔴 Bug / 🟡 Recheck / 🟢 Fixed), then click **📥 Download Bug Pack + PDF Text (.txt)**.")
+        st.caption("🖍️ **Bug Highlight Mode:** Click any wrong cell to mark 🔴 Bug, then click **📥 Download Bug Pack + PDF Text (.txt)**.")
     with h_col2:
         use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
     if not use_highlight_mode:
-        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=620)
         return
 
     aligned_debug = _align_debug_to_rows(rows, columns, debug_list or [])
     sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(columns)}".encode("utf-8")).hexdigest()[:12]
     storage_key = f"ms_policy_mitra_hl_{sig}"
     html_str = _build_highlighter_html(rows, columns, storage_key, aligned_debug, batch_id)
-    iframe_height = min(max(320, 185 + len(rows) * 35), 650)
+    iframe_height = min(max(460, 120 + len(rows) * 36), 840)
     components.html(html_str, height=iframe_height, scrolling=True)
