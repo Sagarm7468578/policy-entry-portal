@@ -13,6 +13,7 @@ def is_star_health_assure(pdf_text: str) -> bool:
     return bool(
         re.search(r"(?i)Star\s+Health\s+Assure\s+Insurance\s+Policy", pdf_text)
         or re.search(r"(?i)SHAHLIP23131V", pdf_text)
+        or re.search(r"(?i)SHAHLIP26048V", pdf_text)
         or re.search(r"(?i)Assure\s+Insurance[\-\s]*20\d{2}", pdf_text)
     )
 
@@ -28,10 +29,11 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
 
     stop_words = {
         "intermediary", "code", "renewal", "year", "collection", "date", "inception",
-        "first", "policy", "name", "optional", "cover", "loading", "discount",
-        "premium", "phone", "no", "cgst", "sgst", "igst", "stamp", "duty", "total", "rs",
-        "e-mail", "email", "mail", "id", "tenth", "ninth", "eighth", "seventh", "sixth",
-        "fifth", "fourth", "third", "second", "eleventh", "twelfth", "fresh", "new",
+        "first", "policy", "category", "name", "optional", "cover", "and", "add-on",
+        "loading", "discount", "premium", "phone", "no", "cgst", "sgst", "igst",
+        "stamp", "duty", "total", "rs", "e-mail", "email", "mail", "id", "tenth",
+        "ninth", "eighth", "seventh", "sixth", "fifth", "fourth", "third", "second",
+        "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "fresh", "new",
     }
 
     lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in block.splitlines()]
@@ -86,7 +88,6 @@ def _extract_star_assure_agency(pdf_text: str) -> str:
 
 
 def _extract_star_assure_sum_insured(pdf_text: str) -> str:
-    # Priority 1: Floater schedule explicit label
     m_si = re.search(
         r"(?i)Basic(?:\s+Floater)?\s+Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
         pdf_text,
@@ -94,7 +95,6 @@ def _extract_star_assure_sum_insured(pdf_text: str) -> str:
     if m_si:
         return clean_amount(m_si.group(1))
 
-    # Priority 2: Individual Assure policy table (stops before Opted Covers so Personal Accident SI is ignored)
     m_tbl = re.search(
         r"(?i)Details\s+of\s+Insured\s+Persons\s*:?([\s\S]{0,1200}?)(?:Pre\s+Existing\s+Disease|Opted\s+Covers|Nominee\s+Details|$)",
         pdf_text,
@@ -107,7 +107,6 @@ def _extract_star_assure_sum_insured(pdf_text: str) -> str:
         if amts:
             return amts[0]
 
-    # Priority 3: Generic labeled Sum Insured
     m_gen = re.search(
         r"(?i)Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
         pdf_text,
@@ -164,8 +163,8 @@ def parse_star_health_assure(pdf_text: str) -> dict:
 
     for pat in [
         r"(?i)Renewal\s*Endorsement\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
+        r"(?i)Policy\s*No\.?\s*[\r\n\s]*[:\-]\s*[\r\n\s]*([A-Z0-9/\-]{8,30})",
         r"(?i)Attached\s+to\s+and\s+forming\s+part\s+of\s+Policy\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
-        r"(?i)Policy\s*No\.?\s*[:\-]\s*([A-Z0-9/\-]{8,30})",
         r"(?i)Health\s+Insurance\s+Policy\s*[\-:]\s*([A-Z0-9/\-]{8,30})",
     ]:
         m = re.search(pat, pdf_text)
@@ -174,7 +173,7 @@ def parse_star_health_assure(pdf_text: str) -> dict:
             break
 
     for pat in [
-        r"(?i)Customer\s*Name[ \t]*[:\-][ \t]*([^\r\n]{3,80})",
+        r"(?i)Customer\s*Name[ \t]*[:\-][ \t]*[\r\n]*[ \t]*([^\r\n]{3,80})",
         r"(?i)Proposer\s*Name[ \t]*[\r\n]*[ \t]*[:\-][ \t]*[\r\n]*[ \t]*([^\r\n]{3,80})",
         r"(?i)This\s+is\s+to\s+certify\s+that\s+([A-Za-z][A-Za-z .]{2,80}?)\s+has\s+paid",
     ]:
@@ -186,12 +185,17 @@ def parse_star_health_assure(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
-    m_pyp = re.search(
+    # Handles BOTH "Previous Policy No : 5136..." AND "towards renewal premium of policy number:"
+    for pat in [
+        r"(?i)Previous\s*Policy\s*No\.?[ \t]*[\r\n]*[ \t]*[:\-][ \t]*([^\r\n]{6,35})",
         r"(?i)towards\s+renewal\s+premium\s+of\s+policy\s*number\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{8,30})",
-        pdf_text,
-    )
-    if m_pyp:
-        data["pyp_number"] = m_pyp.group(1).strip().rstrip(",.")
+    ]:
+        m_pyp = re.search(pat, pdf_text)
+        if m_pyp:
+            cand_pyp = m_pyp.group(1).strip().rstrip(",.")
+            if re.search(r"\d{6,}", cand_pyp) and not re.search(r"(?i)\b(?:Customer|Proposer|Code)\b", cand_pyp):
+                data["pyp_number"] = cand_pyp
+                break
 
     data["agency"] = _extract_star_assure_agency(pdf_text)
 
