@@ -47,7 +47,7 @@ def parse_aditya_birla_activ_health(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
-    # 3. Previous Policy Number (Section II Policy Details)
+    # 3. Previous Policy Number
     m_pyp = re.search(
         r"(?i)Previous\s*Policy\s*Number\s*[\r\n]+\s*([0-9A-Z/\-]{8,30})",
         pdf_text,
@@ -89,17 +89,30 @@ def parse_aditya_birla_activ_health(pdf_text: str) -> dict:
             if data["end_dt"]:
                 break
 
-    # 6. Base Sum Insured
-    for pat in [
-        r"(?i)Family\s*Floater\s*Sum\s*Insured[\s\S]{0,80}?[\r\n]+\s*([\d,]{5,15})",
-        r"(?i)Start\s*date\s*of\s*coverage[\s\S]{0,120}?\d{2}/\d{2}/\d{4}\s*[\r\n]+\s*([\d,]{5,15})",
-    ]:
-        m_si = re.search(pat, pdf_text)
-        if m_si:
-            amt = clean_amount(m_si.group(1))
-            if amt.isdigit() and int(amt) >= 100000:
+    # 6. Base Sum Insured (handles Family Floater & Individual tables with wrapped dates like "23/08/20\n26")
+    m_cov_sec = re.search(
+        r"(?i)Applicability\s+of\s+Chronic\s+Management\s+Program([\s\S]{0,1600}?)(?:Inbuilt\s+Premiere|Optional\s+Covers|$)",
+        pdf_text,
+    )
+    if m_cov_sec:
+        sec_joined = re.sub(r"(\d{2}/\d{2}/\d{2})\s*[\r\n]+\s*(\d{2})\b", r"\1\2", m_cov_sec.group(1))
+        for pat in [
+            r"([\d,]{5,15})\s*[\r\n]+\s*Zone\s*(?:I{1,3}V?|\d)",
+            r"\d{2}/\d{2}/\d{4}\s*[\r\n]+\s*([\d,]{5,15})",
+        ]:
+            m_si = re.search(pat, sec_joined, re.I)
+            if m_si:
+                amt = clean_amount(m_si.group(1))
+                if amt.isdigit() and int(amt) >= 50000:
+                    data["sum_insured"] = amt
+                    break
+
+    if not data["sum_insured"]:
+        m_si_fl = re.search(r"(?i)Family\s*Floater\s*Sum\s*Insured[\s\S]{0,80}?[\r\n]+\s*([\d,]{5,15})", pdf_text)
+        if m_si_fl:
+            amt = clean_amount(m_si_fl.group(1))
+            if amt.isdigit() and int(amt) >= 50000:
                 data["sum_insured"] = amt
-                break
 
     # 7. Total Premium
     for pat in [
