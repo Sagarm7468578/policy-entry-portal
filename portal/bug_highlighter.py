@@ -5,14 +5,74 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 
-def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
+def _align_debug_to_rows(rows: list, columns: list, debug_list: list) -> list:
+    """Aligns each Preview Mode row with its corresponding debug item (file_name + raw_text)."""
+    if not rows:
+        return []
+    if not debug_list:
+        return [{"file_name": "", "raw_text": ""} for _ in rows]
+
+    if len(debug_list) == len(rows):
+        return [
+            {
+                "file_name": str(d.get("file_name", "") or ""),
+                "raw_text": str(d.get("raw_text", "") or ""),
+            }
+            for d in debug_list
+        ]
+
+    # If some Drive PDFs failed before parsing, filter download-failed entries first
+    filtered = [
+        d for d in debug_list
+        if d.get("raw_text") or "download" not in str(d.get("error_reason", "")).lower()
+    ]
+    if len(filtered) == len(rows):
+        return [
+            {
+                "file_name": str(d.get("file_name", "") or ""),
+                "raw_text": str(d.get("raw_text", "") or ""),
+            }
+            for d in filtered
+        ]
+
+    # Fallback: match sequentially by Client Name (consuming each entry once for duplicate names)
+    name_col = next((c for c in columns if c.strip().lower() == "client name"), columns[0] if columns else "")
+    used = set()
+    aligned = []
+    for r in rows:
+        r_name = str(r.get(name_col, "") or "").strip().upper()
+        matched = None
+        for idx, d in enumerate(debug_list):
+            if idx in used:
+                continue
+            d_name = str(d.get("client_name", "") or "").strip().upper()
+            if r_name and d_name and r_name == d_name:
+                used.add(idx)
+                matched = d
+                break
+        if matched is None:
+            for idx, d in enumerate(debug_list):
+                if idx not in used:
+                    used.add(idx)
+                    matched = d
+                    break
+        aligned.append({
+            "file_name": str((matched or {}).get("file_name", "") or ""),
+            "raw_text": str((matched or {}).get("raw_text", "") or ""),
+        })
+    return aligned
+
+
+def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned_debug: list, batch_id: str) -> str:
     payload = {
         "columns": list(columns),
         "rows": [
             {col: ("" if r.get(col) is None else str(r.get(col))) for col in columns}
             for r in rows
         ],
+        "debug": aligned_debug,
         "storageKey": storage_key,
+        "batchId": batch_id,
     }
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
 
@@ -36,7 +96,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     border-radius: 8px;
     font-size: 13px;
   }}
-  .tool-group {{ display: flex; align-items: center; gap: 6px; }}
+  .tool-group {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
   .sep {{ width: 1px; height: 22px; background: #cbd5e1; margin: 0 2px; }}
 
   .btn {{
@@ -52,6 +112,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    text-decoration: none;
   }}
   .btn:hover {{ background: #f1f5f9; }}
   .btn.active-red {{ background: #fee2e2; border-color: #dc2626; color: #991b1b; box-shadow: 0 0 0 1px #dc2626; }}
@@ -60,6 +121,8 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
   .btn.active-filter {{ background: #1e40af; border-color: #1e40af; color: #ffffff; }}
   .btn.primary {{ background: #1f4e78; border-color: #1f4e78; color: #ffffff; }}
   .btn.primary:hover {{ background: #163a5a; }}
+  .btn.pack {{ background: #0f766e; border-color: #0f766e; color: #ffffff; }}
+  .btn.pack:hover {{ background: #115e59; }}
   .btn.danger {{ color: #b91c1c; border-color: #fca5a5; }}
   .btn.danger:hover {{ background: #fef2f2; }}
 
@@ -72,7 +135,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     color: #334155;
   }}
   .badge.has-bugs {{ background: #fee2e2; color: #991b1b; }}
-  .copy-msg {{ font-size: 12px; font-weight: 600; color: #059669; display: none; }}
+  .status-msg {{ font-size: 12px; font-weight: 600; color: #059669; display: none; }}
 
   .table-wrap {{
     width: 100%;
@@ -206,9 +269,10 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     <div class="tool-group">
       <span id="bug-count" class="badge">0 Highlighted</span>
       <button id="btn-filter" class="btn" onclick="toggleFilter()">🔎 Only Highlighted Rows</button>
-      <button class="btn primary" onclick="copyBugList()">📋 Copy Highlighted Bugs</button>
+      <button class="btn pack" onclick="downloadBugPack()">📥 Download Bug Pack + PDF Text (.txt)</button>
+      <button class="btn primary" onclick="copyBugList()">📋 Copy Summary</button>
       <button class="btn danger" onclick="clearAll()">🗑️ Clear All</button>
-      <span id="copy-msg" class="copy-msg">✅ Copied!</span>
+      <span id="status-msg" class="status-msg"></span>
     </div>
   </div>
 
@@ -217,9 +281,12 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
   </div>
 
   <div id="summary-box" class="summary-box">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <strong style="font-size:12.5px;color:#92400e;">Highlighted Bugs Summary (Ready to paste in chat):</strong>
-      <button class="btn" onclick="document.getElementById('summary-box').style.display='none'">✖ Close</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <strong id="summary-title" style="font-size:12.5px;color:#92400e;">Highlighted Bugs Summary:</strong>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <a id="dl-fallback-link" class="btn pack" style="display:none;" download>📥 Click here if download didn't start</a>
+        <button class="btn" onclick="document.getElementById('summary-box').style.display='none'">✖ Close</button>
+      </div>
     </div>
     <textarea id="summary-text" readonly></textarea>
   </div>
@@ -228,7 +295,9 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
   const PAYLOAD = {data_json};
   const COLS = PAYLOAD.columns || [];
   const ROWS = PAYLOAD.rows || [];
+  const DEBUG_LIST = PAYLOAD.debug || [];
   const STORAGE_KEY = PAYLOAD.storageKey;
+  const BATCH_ID = PAYLOAD.batchId || "batch";
 
   const nameColIdx = COLS.findIndex(c => c.trim().toLowerCase() === "client name");
   const compColName = COLS.find(c => c.trim().toLowerCase() === "company name") || "";
@@ -238,6 +307,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
   let activeColor = "red";
   let onlyHighlighted = false;
   let highlights = {{}};
+  let lastBlobUrl = null;
 
   function loadHighlights() {{
     try {{
@@ -250,6 +320,13 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     try {{
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(highlights));
     }} catch (e) {{}}
+  }}
+
+  function showStatus(text) {{
+    const msg = document.getElementById("status-msg");
+    msg.textContent = text;
+    msg.style.display = "inline";
+    setTimeout(() => {{ msg.style.display = "none"; }}, 2600);
   }}
 
   function setColor(c) {{
@@ -313,7 +390,7 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     }}
   }}
 
-  function buildBugReportText() {{
+  function collectHighlightedByRow() {{
     const byRow = {{}};
     Object.keys(highlights).forEach(k => {{
       const color = highlights[k];
@@ -324,10 +401,11 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
       if (!byRow[rIdx]) byRow[rIdx] = [];
       byRow[rIdx].push({{ col: COLS[cIdx], val: ROWS[rIdx][COLS[cIdx]] || "[BLANK]", color }});
     }});
-
     const rowIndices = Object.keys(byRow).map(Number).sort((a, b) => a - b);
-    if (rowIndices.length === 0) return "";
+    return {{ byRow, rowIndices }};
+  }}
 
+  function buildSummaryText(byRow, rowIndices) {{
     const out = [];
     rowIndices.forEach((rIdx, i) => {{
       const row = ROWS[rIdx];
@@ -344,31 +422,115 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
     return out.join("\\n");
   }}
 
-  function copyBugList() {{
-    const txt = buildBugReportText();
-    if (!txt) {{
+  function buildFullBugPackText(byRow, rowIndices) {{
+    const lines = [];
+    const total = rowIndices.length;
+    lines.push("================================================================================");
+    lines.push("MS.SOFT POLICY MITRA - HIGHLIGHTED BUG PACK (SUMMARY + RAW PDF TEXT)");
+    lines.push("Batch ID: " + BATCH_ID + " | Total Highlighted Entries: " + total);
+    lines.push("================================================================================");
+    lines.push("");
+    lines.push("SUMMARY INDEX:");
+    lines.push(buildSummaryText(byRow, rowIndices));
+    lines.push("");
+
+    rowIndices.forEach((rIdx, i) => {{
+      const row = ROWS[rIdx];
+      const dbg = DEBUG_LIST[rIdx] || {{}};
+      const cname = (clientColName && row[clientColName]) ? row[clientColName] : ("Row #" + (rIdx + 1));
+      const comp = compColName && row[compColName] ? row[compColName] : "UNKNOWN";
+      const plan = planColName && row[planColName] ? row[planColName] : "UNKNOWN";
+      const fname = dbg.file_name || "N/A";
+      const rawTxt = dbg.raw_text || "[Raw PDF text not available]";
+
+      lines.push("################################################################################");
+      lines.push("BUG ENTRY #" + (i + 1) + " OF " + total);
+      lines.push("################################################################################");
+      lines.push("CLIENT NAME  : " + cname);
+      lines.push("COMPANY NAME : " + comp);
+      lines.push("PLAN NAME    : " + plan);
+      lines.push("PDF FILE     : " + fname);
+      lines.push("HIGHLIGHTED BUGS:");
+      byRow[rIdx].forEach(item => {{
+        const tag = item.color === "red" ? "BUG" : "CHECK";
+        lines.push("  - [" + tag + "] " + item.col + ': "' + item.val + '"');
+      }});
+      lines.push("");
+      lines.push("EXTRACTED ROW SNAPSHOT:");
+      const rowPairs = COLS.map(c => c + "=" + (row[c] || "[BLANK]"));
+      lines.push("  " + rowPairs.join(" | "));
+      lines.push("");
+      lines.push("--- RAW PDF TEXT START (" + fname + ") ---");
+      lines.push(rawTxt);
+      lines.push("--- RAW PDF TEXT END (" + fname + ") ---");
+      lines.push("");
+      lines.push("");
+    }});
+
+    return lines.join("\\n");
+  }}
+
+  function downloadBugPack() {{
+    const {{ byRow, rowIndices }} = collectHighlightedByRow();
+    if (rowIndices.length === 0) {{
       alert("Please click at least one cell with 🔴 Bug or 🟡 Recheck first.");
       return;
     }}
+
+    const packText = buildFullBugPackText(byRow, rowIndices);
+    const summaryTxt = buildSummaryText(byRow, rowIndices);
+    const filename = "BUG_PACK_" + rowIndices.length + "_ENTRIES_" + BATCH_ID + ".txt";
+
+    if (lastBlobUrl) {{
+      try {{ URL.revokeObjectURL(lastBlobUrl); }} catch (e) {{}}
+    }}
+    const blob = new Blob([packText], {{ type: "text/plain;charset=utf-8" }});
+    lastBlobUrl = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = lastBlobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
     const box = document.getElementById("summary-box");
     const ta = document.getElementById("summary-text");
+    const title = document.getElementById("summary-title");
+    const fbLink = document.getElementById("dl-fallback-link");
+    title.textContent = "✅ Bug Pack Ready (" + rowIndices.length + " Entries + Full PDF Texts) — Attach the downloaded .txt file in chat:";
+    ta.value = summaryTxt;
+    fbLink.href = lastBlobUrl;
+    fbLink.download = filename;
+    fbLink.style.display = "inline-flex";
+    box.style.display = "block";
+    showStatus("✅ Downloaded " + filename);
+  }}
+
+  function copyBugList() {{
+    const {{ byRow, rowIndices }} = collectHighlightedByRow();
+    if (rowIndices.length === 0) {{
+      alert("Please click at least one cell with 🔴 Bug or 🟡 Recheck first.");
+      return;
+    }}
+    const txt = buildSummaryText(byRow, rowIndices);
+    const box = document.getElementById("summary-box");
+    const ta = document.getElementById("summary-text");
+    const title = document.getElementById("summary-title");
+    const fbLink = document.getElementById("dl-fallback-link");
+    title.textContent = "Highlighted Bugs Summary (Ready to paste in chat):";
+    fbLink.style.display = "none";
     ta.value = txt;
     box.style.display = "block";
 
-    const showCopied = () => {{
-      const msg = document.getElementById("copy-msg");
-      msg.style.display = "inline";
-      setTimeout(() => {{ msg.style.display = "none"; }}, 2200);
-    }};
-
     if (navigator.clipboard && navigator.clipboard.writeText) {{
-      navigator.clipboard.writeText(txt).then(showCopied).catch(() => {{
+      navigator.clipboard.writeText(txt).then(() => showStatus("✅ Copied!")).catch(() => {{
         ta.select();
-        try {{ document.execCommand("copy"); showCopied(); }} catch (e) {{}}
+        try {{ document.execCommand("copy"); showStatus("✅ Copied!"); }} catch (e) {{}}
       }});
     }} else {{
       ta.select();
-      try {{ document.execCommand("copy"); showCopied(); }} catch (e) {{}}
+      try {{ document.execCommand("copy"); showStatus("✅ Copied!"); }} catch (e) {{}}
     }}
   }}
 
@@ -452,10 +614,11 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str) -> str:
 """
 
 
-def render_preview_table(rows: list, columns: list, batch_id: str, enable_highlighter: bool = False):
+def render_preview_table(rows: list, columns: list, batch_id: str, enable_highlighter: bool = False, debug_list: list = None):
     """
     Renders Preview Mode table.
-    - Admin users get an interactive click-to-highlight cell table (Red/Yellow/Green) + Filter + Copy Bug List.
+    - Admin users get an interactive click-to-highlight cell table (Red/Yellow/Green),
+      Filter, Copy Summary, and 1-Click Download Bug Pack (.txt with Company, Plan, Bugs & Full Raw PDF Texts).
     - Regular users see the clean standard Streamlit dataframe.
     """
     if not rows:
@@ -467,7 +630,7 @@ def render_preview_table(rows: list, columns: list, batch_id: str, enable_highli
 
     h_col1, h_col2 = st.columns([3, 1])
     with h_col1:
-        st.caption("🖍️ **Bug Highlight Mode:** Click any cell to highlight it (🔴 Bug / 🟡 Recheck / 🟢 Fixed). Click again to remove.")
+        st.caption("🖍️ **Bug Highlight Mode:** Click any wrong cell (🔴 Bug / 🟡 Recheck / 🟢 Fixed), then click **📥 Download Bug Pack + PDF Text (.txt)**.")
     with h_col2:
         use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
@@ -475,8 +638,9 @@ def render_preview_table(rows: list, columns: list, batch_id: str, enable_highli
         st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True)
         return
 
+    aligned_debug = _align_debug_to_rows(rows, columns, debug_list or [])
     sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(columns)}".encode("utf-8")).hexdigest()[:12]
     storage_key = f"ms_policy_mitra_hl_{sig}"
-    html_str = _build_highlighter_html(rows, columns, storage_key)
+    html_str = _build_highlighter_html(rows, columns, storage_key, aligned_debug, batch_id)
     iframe_height = min(max(320, 185 + len(rows) * 35), 650)
     components.html(html_str, height=iframe_height, scrolling=True)
