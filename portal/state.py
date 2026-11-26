@@ -34,6 +34,7 @@ DEFAULTS = {
     "health_renewal_folder_url": "", "health_renewal_folder_name": "",
     "motor_renewal_folder_url": "", "motor_renewal_folder_name": "",
     "sme_renewal_folder_url": "", "sme_renewal_folder_name": "",
+    "health_share_under60": "12", "health_share_60plus": "8",
     "health_custom_columns": "",
     "health_folder_url": "", "health_folder_name": "",
     "motor_folder_url": "", "motor_folder_name": "",
@@ -95,7 +96,7 @@ def handle_auto_google_login():
 def render_login_screen(google_configured, google_logged_in, g_email):
     _, col2, _ = st.columns([1, 2, 1])
     with col2:
-        st.title("🛡️ Soft.SM Policy Mitra")
+        st.title("🛡️ MS.Soft Policy Mitra")
         st.caption("All-in-One Insurance Advisor Automation Suite")
         if google_logged_in and st.session_state.google_auth_error:
             st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
