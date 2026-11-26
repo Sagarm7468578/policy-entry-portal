@@ -5,6 +5,7 @@ from health_parsers.plans.verified_defaults import apply_verified_defaults
 _PLAN_SPECS = [
     ("HDFC ERGO", "hdfc_sarv_suraksha_plus_group", "is_hdfc_sarv_suraksha_plus_group", "parse_hdfc_sarv_suraksha_plus_group"),
     ("HDFC ERGO", "hdfc_optima_restore", "is_hdfc_optima_restore", "parse_hdfc_optima_restore"),
+    ("HDFC ERGO", "hdfc_optima_secure", "is_hdfc_optima_secure", "parse_hdfc_optima_secure"),
     ("HDFC ERGO", "hdfc_koti_suraksha", "is_hdfc_koti_suraksha", "parse_hdfc_koti_suraksha"),
     ("HDFC ERGO", "hdfc_energy", "is_hdfc_energy", "parse_hdfc_energy"),
     ("HDFC ERGO", "hdfc_individual_pa", "is_hdfc_individual_pa", "parse_hdfc_individual_pa"),
@@ -20,6 +21,7 @@ _PLAN_SPECS = [
     ("STAR HEALTH", "star_senior_citizens_red_carpet", "is_star_senior_citizens_red_carpet", "parse_star_senior_citizens_red_carpet"),
     ("NIVA BUPA", "niva_bupa_reassure3", "is_niva_bupa_reassure3", "parse_niva_bupa_reassure3"),
     ("NIVA BUPA", "niva_bupa_reassure2", "is_niva_bupa_reassure2", "parse_niva_bupa_reassure2"),
+    ("NIVA BUPA", "niva_bupa_health_recharge", "is_niva_bupa_health_recharge", "parse_niva_bupa_health_recharge"),
     ("NATIONAL", "national_parivar_mediclaim", "is_national_parivar_mediclaim", "parse_national_parivar_mediclaim"),
     ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
     ("MANIPAL CIGNA", "manipal_cigna_sarvah", "is_manipal_cigna_sarvah", "parse_manipal_cigna_sarvah"),
