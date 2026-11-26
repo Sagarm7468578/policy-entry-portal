@@ -1,8 +1,29 @@
 import hashlib
 import json
+import re
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+
+# Columns hidden ONLY in Preview Window (Excel / Google Sheets export remains 100% untouched)
+HIDDEN_PREVIEW_COLS_NORM = {
+    "occupation",
+    "mailid",
+    "healthdatasheet",
+    "yes/no/inadequate",
+    "remark",
+    "mail",
+    "print",
+    "folder",
+}
+
+
+def _filter_preview_columns(columns: list) -> list:
+    visible = [
+        c for c in columns
+        if re.sub(r"[\s_\-]+", "", str(c or "").strip().lower()) not in HIDDEN_PREVIEW_COLS_NORM
+    ]
+    return visible if visible else list(columns)
 
 
 def _align_debug_to_rows(rows: list, columns: list, debug_list: list) -> list:
@@ -547,15 +568,16 @@ def _build_highlighter_html(rows: list, columns: list, storage_key: str, aligned
 
 def render_preview_table(rows: list, columns: list, batch_id: str, enable_highlighter: bool = False, debug_list: list = None):
     """
-    Renders Preview Mode table for the current round only.
-    - Admin users get a locked-height click-to-highlight red bug table with zero scroll-chaining.
-    - Regular users see the clean standard Streamlit dataframe.
+    Renders Preview Mode table for the current round only (with non-essential columns hidden in Preview only).
+    Excel / Google Sheet saving continues to include ALL columns untouched.
     """
     if not rows:
         return
 
+    visible_cols = _filter_preview_columns(columns)
+
     if not enable_highlighter:
-        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=560)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=560)
         return
 
     h_col1, h_col2 = st.columns([3, 1])
@@ -565,12 +587,12 @@ def render_preview_table(rows: list, columns: list, batch_id: str, enable_highli
         use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
     if not use_highlight_mode:
-        st.dataframe(pd.DataFrame(rows, columns=columns), use_container_width=True, hide_index=True, height=560)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=560)
         return
 
-    aligned_debug = _align_debug_to_rows(rows, columns, debug_list or [])
-    sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(columns)}".encode("utf-8")).hexdigest()[:12]
+    aligned_debug = _align_debug_to_rows(rows, visible_cols, debug_list or [])
+    sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(visible_cols)}".encode("utf-8")).hexdigest()[:12]
     storage_key = f"ms_policy_mitra_hl_{sig}"
-    html_str = _build_highlighter_html(rows, columns, storage_key, aligned_debug, batch_id)
+    html_str = _build_highlighter_html(rows, visible_cols, storage_key, aligned_debug, batch_id)
     iframe_height = min(max(280, 120 + len(rows) * 34), 560)
     components.html(html_str, height=iframe_height, scrolling=False)
