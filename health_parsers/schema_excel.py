@@ -83,7 +83,9 @@ def get_custom_schema_info(spec_str: str) -> dict:
 
     for src, dst in mapping:
         canonical = src or SYSTEM_FIELD_LOOKUP.get(dst.lower(), "")
-        if canonical in {"Premium", "Sum Insured", "PYP premium", "Share", "Share %"}:
+        if canonical == "Share %":
+            col_types[dst] = "percent"
+        elif canonical in {"Premium", "Sum Insured", "PYP premium", "Share"}:
             col_types[dst] = "number"
         elif canonical == "Mobile":
             col_types[dst] = "mobile"
@@ -146,7 +148,9 @@ def to_excel_value(col_name: str, raw_val, col_type: str = ""):
     t = col_type
     if not t:
         c_low = col_name.lower()
-        if c_low in {"premium", "sum insured", "pyp premium", "share", "share %"}:
+        if c_low == "share %":
+            t = "percent"
+        elif c_low in {"premium", "sum insured", "pyp premium", "share"}:
             t = "number"
         elif c_low == "mobile":
             t = "mobile"
@@ -162,6 +166,14 @@ def to_excel_value(col_name: str, raw_val, col_type: str = ""):
     if t == "date":
         dt = parse_any_date(val)
         return (dt.date(), "dd-mm-yyyy") if dt else (val, None)
+
+    if t == "percent":
+        cleaned = val.replace(",", "").replace("%", "").strip()
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", cleaned):
+            num = float(cleaned)
+            pct_val = num / 100.0 if num > 1 else num
+            return pct_val, "0%"
+        return val, None
 
     if t == "number":
         cleaned = val.replace(",", "").replace("%", "").strip()
@@ -357,7 +369,7 @@ def read_excel_headers_from_bytes(excel_bytes: bytes, sheet_name: str = ""):
         tabs = list(wb.sheetnames)
         if ws is None:
             wb.close()
-            return [], tabs, f"Excel me '{req}' naam ka tab nahi mila. Available tabs: {', '.join(tabs)}"
+            return [], tabs, f"Sheet tab '{req}' not found. Available tabs: {', '.join(tabs)}"
         first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
         headers = [str(v).strip() for v in first_row if v is not None and str(v).strip() != ""]
         wb.close()
@@ -389,13 +401,13 @@ def append_rows_to_local_excel(
 ):
     clean_path = str(file_path or "").strip().strip('"').strip("'")
     if not clean_path:
-        return False, "Excel file ka path khali hai.", 0, 0, 0
+        return False, "Excel file path is empty.", 0, 0, 0
     if not clean_path.lower().endswith((".xlsx", ".xlsm")):
-        return False, "Sirf .xlsx ya .xlsm Excel file supported hai.", 0, 0, 0
+        return False, "Only .xlsx or .xlsm Excel files are supported.", 0, 0, 0
 
     parent_dir = os.path.dirname(clean_path)
     if parent_dir and not os.path.exists(parent_dir):
-        return False, f"Folder nahi mila: {parent_dir}", 0, 0, 0
+        return False, f"Folder not found: {parent_dir}", 0, 0, 0
 
     try:
         keep_vba = clean_path.lower().endswith(".xlsm")
@@ -410,8 +422,8 @@ def append_rows_to_local_excel(
             wb, rows, sheet_name, skip_duplicates, custom_columns, col_types, policy_col, expiry_col
         )
         wb.save(clean_path)
-        return True, f"{added} nayi entries direct '{os.path.basename(clean_path)}' me save ho gayi!", added, skipped, total_entries
+        return True, f"Saved {added} new entries directly to '{os.path.basename(clean_path)}'!", added, skipped, total_entries
     except PermissionError:
-        return False, "Excel file abhi MS Excel me khuli hui hai! Pehle Excel close karein aur dobara try karein.", 0, 0, 0
+        return False, "The Excel file is currently open in MS Excel. Please close it and try again.", 0, 0, 0
     except Exception as e:
         return False, f"Local Excel save error: {e}", 0, 0, 0
