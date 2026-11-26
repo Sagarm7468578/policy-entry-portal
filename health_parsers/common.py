@@ -154,6 +154,46 @@ def clean_person_name(name: str) -> str:
     return name.upper()
 
 
+def shorten_agency_name(name: str) -> str:
+    """Shortens long corporate broker names (e.g. 'GIRNAR INSURANCE BROKERS PRIVATE LIMITED' -> 'GIRNAR',
+    'BIMAKAVACH INSURANCE BROKING PRIVATE LIMITED' -> 'BIMAKAVACH') while leaving human agent names untouched."""
+    s = re.sub(r"\s+", " ", str(name or "")).strip(" .,:-_/")
+    if not s:
+        return ""
+    s_up = s.upper()
+
+    known_brokers = [
+        (r"\bGIRNAR\b", "GIRNAR"),
+        (r"\bBIMA\s*KAVACH\b", "BIMAKAVACH"),
+        (r"\bPOLICY\s*BAZAAR\b", "POLICYBAZAAR"),
+        (r"\bTURTLE\s*MINT\b", "TURTLEMINT"),
+        (r"\bINSURANCE\s*DEKHO\b", "INSURANCEDEKHO"),
+        (r"\bSQUARE\s*INSURANCE\b", "SQUARE"),
+        (r"\bRENEW\s*BUY\b", "RENEWBUY"),
+        (r"\bPROBUS\b", "PROBUS"),
+        (r"\bPB\s*PARTNERS\b", "PBPARTNERS"),
+        (r"\bBIMA\s*WALE\s*BHAIYA\b", "BIMA WALE BHAIYA"),
+    ]
+    for pat, short_nm in known_brokers:
+        if re.search(pat, s_up):
+            return short_nm
+
+    corp_pat = (
+        r"(?i)\b(?:"
+        r"INSURANCE\s+BROKING|INSURANCE\s+BROKERS?|INSURANCE\s+WEB\s+AGGREGATOR|"
+        r"INSURANCE\s+MARKETING(?:\s+FIRM)?|INSURANCE\s+SERVICES?|"
+        r"BROKING\s+SERVICES?|BROKING|BROKERS?|"
+        r"PRIVATE\s+LIMITED|PVT\.?\s*LTD\.?|LIMITED|LTD\.?|PRIVATE|LLP"
+        r")\b"
+    )
+    if re.search(corp_pat, s_up):
+        trimmed = re.split(corp_pat, s_up)[0]
+        trimmed = re.sub(r"\s+", " ", trimmed).strip(" .,:-_/")
+        if len(trimmed) >= 2:
+            return trimmed
+    return s_up
+
+
 def extract_generic_agency(pdf_text: str) -> str:
     patterns = [
         r"(?i)Name\s+of\s+(?:the\s+)?[\r\n\s]*(?:Agent|Intermediary|Broker|Advisor|POSP)(?:[/\s]*(?:Agent|Intermediary|Broker|Advisor|POSP|CPSC|User|IMD|Direct))*[\s:\-\r\n]+([^\r\n]{3,70})",
@@ -182,7 +222,7 @@ def extract_generic_agency(pdf_text: str) -> str:
             if len(val) >= 3 and not val.isdigit():
                 first_word = val.split()[0].lower()
                 if first_word not in bad_starts:
-                    return val.upper()
+                    return shorten_agency_name(val)
     return ""
 
 
@@ -203,7 +243,7 @@ def extract_premium_mode(pdf_text: str) -> str:
         )
 
         if re.search(
-            r"(?i)(?:\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU|Payment\s*Gateway|Gateway|BizDirect|OPS[A-Z0-9]{8,}|EASI\d{8,}|QR_RENEWAL)\b|PG_[A-Z0-9_]+)",
+            r"(?i)(?:\b(?:IPG|EPG|PG|Online|UPI|NEFT|RTGS|IMPS|Net\s*Banking|NetBanking|Internet\s*Banking|Credit\s*Card|Debit\s*Card|Card|E-?Pay(?:ment)?|Digital|BillDesk|Razorpay|PayU|Payment\s*Gateway|Gateway|BizDirect|OPS[A-Z0-9]{8,}|EASI\d{8,}|QR_RENEWAL|paymentLink\w*)\b|PG_[A-Z0-9_]+)",
             clean_block,
         ):
             return "ONLINE"
