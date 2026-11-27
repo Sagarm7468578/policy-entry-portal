@@ -7,9 +7,11 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NIVA BUPA", "REASSURE 2.0"),
     ("NIVA BUPA", "REASSURE 3.0"),
     ("NIVA BUPA", "HEALTH RECHARGE"),
+    ("NIVA BUPA", "HEALTH COMPANION"),
     ("HDFC ERGO", "OPTIMA RESTORE"),
     ("HDFC ERGO", "OS"),
     ("HDFC ERGO", "PERSONAL ACCIDENT"),
+    ("HDFC ERGO", "SARV SURAKSHA PLUS (GROUP)"),
     ("HDFC ERGO", "GROUP HEALTH ENDORSEMENT"),
     ("STAR HEALTH", "FAMILY ACCIDENT CARE"),
     ("STAR HEALTH", "STAR HEALTH ASSURE"),
@@ -18,11 +20,13 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("STAR HEALTH", "HOSPITAL CASH"),
     ("STAR HEALTH", "STAR SUPER SURPLUS"),
     ("STAR HEALTH", "FAMILY HEALTH OPTIMA"),
+    ("STAR HEALTH", "MEDI CLASSIC (INDIVIDUAL)"),
     ("IFFCO TOKIO", "FHP"),
     ("ADITYA BIRLA", "ACTIV HEALTH"),
     ("ADITYA BIRLA", "ACTIV YUVA"),
     ("ADITYA BIRLA", "ACTIV ONE"),
     ("NATIONAL", "PERSONAL ACCIDENT"),
+    ("NEW INDIA", "YUVA BHARAT"),
     ("TATA AIG", "TRAVEL"),
     ("ICICI LOMBARD", "GROUP HEALTH"),
 }
@@ -83,7 +87,6 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
     if not pdf_text or not comp:
         return ""
 
-    # Guard: skip regular renewals / explicitly non-ported policies
     if re.search(r"(?i)(?:Ported\s*Policy|Portable\s*Case|Portability(?:/Migration)?)\s*[:\-]?\s*[\r\n\s]*No\b", pdf_text):
         return ""
 
@@ -97,7 +100,16 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
         if prev and prev != comp:
             return prev
 
-    # Check if PDF explicitly flags current policy as Portability
+    # Pattern 2: Care Health "Portability Details of the Insured -> Previous Insurer :"
+    m_care = re.search(
+        r"(?i)Portability\s+Details\s+of\s+the\s+Insured[\s\S]{0,80}?Previous\s+Insurer\s*[:\-]\s*[\r\n\s]*([^\r\n]{3,90})",
+        pdf_text,
+    )
+    if m_care:
+        prev = _canonical_insurer(m_care.group(1))
+        if prev and prev != comp:
+            return prev
+
     is_port_case = bool(
         re.search(r"(?i)Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Portability\b", pdf_text)
         or re.search(r"(?i)(?:Ported\s*Policy|Portable\s*Case|Portability(?:/Migration)?)\s*[:\-]?\s*[\r\n\s]*Yes\b", pdf_text)
@@ -106,7 +118,7 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
     if not is_port_case:
         return ""
 
-    # Pattern 2: Previous Insurance / Portability section mentioning a different insurer
+    # Pattern 3: Previous Insurance / Portability section mentioning a different insurer
     for m_sec in re.finditer(
         r"(?i)(?:Previous\s+Insurance\s+Details|Previous\s+Insurer\s+Details|Previous\s+Insurer[\s\S]{0,80}?Previous\s+Policy|Portability\s+Continuity\s+Benefits)([\s\S]{0,2200})",
         pdf_text,
@@ -123,11 +135,6 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
 
 
 def _derive_hdfc_pyp(policy_number: str) -> str:
-    """
-    HDFC ERGO 19-digit policy format: [14-digit base][2-digit renewal count][000/001].
-    - Renewal count > 00 -> decrement count by 1 (e.g. ...06000 -> ...05000).
-    - Renewal count == 00 -> Fresh policy ("FRESH").
-    """
     digits = re.sub(r"\s+", "", str(policy_number or ""))
     if re.fullmatch(r"\d{19}", digits) and digits[-3:].startswith("00"):
         base = digits[:14]
@@ -139,11 +146,6 @@ def _derive_hdfc_pyp(policy_number: str) -> str:
 
 
 def _derive_niva_bupa_pyp(policy_number: str) -> str:
-    """
-    Niva Bupa 14-digit policy format: [8-digit base][4-digit year][2-digit renewal count].
-    - Renewal count > 00 -> year - 1 & count - 1 (e.g. 31690007202603 -> 31690007202502).
-    - Renewal count == 00 -> Fresh policy ("FRESH").
-    """
     digits = re.sub(r"\s+", "", str(policy_number or ""))
     if re.fullmatch(r"\d{14}", digits):
         base = digits[:8]
@@ -157,7 +159,6 @@ def _derive_niva_bupa_pyp(policy_number: str) -> str:
 
 
 def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
-    """Detects explicitly labeled Fresh / New policies so PYP Number is marked 'FRESH'."""
     if company == "STAR HEALTH":
         if re.search(r"(?i)Policy\s*Category\s*[\r\n\s]*:?\s*[\r\n\s]*\b(?:New|Fresh)\b", pdf_text):
             return True
