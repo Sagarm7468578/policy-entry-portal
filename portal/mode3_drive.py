@@ -120,21 +120,28 @@ def render_mode3_workspace(ctx):
         df_selectable = pd.DataFrame([
             {
                 "Select": st.session_state.drive_pdf_sel_default,
-                "#": i + 1,
+                "#": str(i + 1),
                 "File Name": f["name"],
                 "Status": "✅ Entered" if f.get("last_status") == "DONE" else ("⚠️ Prev Error" if f.get("last_status") == "ERROR" else "🆕 New"),
                 "Modified": f.get("updated", ""),
             }
             for i, f in enumerate(candidate_files)
         ])
+        # Compact 6-row visible height + left-aligned columns so Header & Details align on the same side
+        visible_rows = min(len(candidate_files), 6)
+        list_height = 38 + visible_rows * 35
         edited_df = st.data_editor(
             df_selectable,
             use_container_width=True,
             hide_index=True,
+            height=list_height,
             disabled=["#", "File Name", "Status", "Modified"],
             column_config={
                 "Select": st.column_config.CheckboxColumn("Select", default=True, width="small"),
-                "#": st.column_config.NumberColumn("#", width="small"),
+                "#": st.column_config.TextColumn("#", width="small"),
+                "File Name": st.column_config.TextColumn("File Name", width="large"),
+                "Status": st.column_config.TextColumn("Status", width="small"),
+                "Modified": st.column_config.TextColumn("Modified", width="medium"),
             },
             key=f"m3_pdf_editor_{st.session_state.drive_pdf_sel_ver}",
         )
