@@ -51,7 +51,8 @@ def _load_fresh_parsers():
             del sys.modules[mod_name]
     hp_pkg = importlib.import_module("health_parsers")
     plans_pkg = importlib.import_module("health_parsers.plans")
-    return hp_pkg.COMPANY_PARSERS, plans_pkg.dispatch_plan_parser
+    apply_defaults_fn = getattr(plans_pkg, "apply_verified_defaults", None)
+    return hp_pkg.COMPANY_PARSERS, plans_pkg.dispatch_plan_parser, apply_defaults_fn
 
 
 def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, accounts_df=None):
@@ -73,7 +74,7 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
     }
 
     try:
-        company_parsers, dispatch_plan_parser = _load_fresh_parsers()
+        company_parsers, dispatch_plan_parser, apply_defaults_fn = _load_fresh_parsers()
 
         pdf_text = extract_pdf_text(pdf_bytes)
         debug_info["raw_text"] = pdf_text
@@ -99,6 +100,8 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
                 debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
                 return base_row, False, debug_info["error_reason"], debug_info
             extracted = parser_fn(pdf_text)
+            if callable(apply_defaults_fn):
+                extracted = apply_defaults_fn(company, extracted, pdf_text)
 
         if not extracted.get("client_name") and not extracted.get("policy_number"):
             base_row["Client Name"] = file_name
@@ -144,6 +147,8 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
             "Expiry Date": fmt_date(end_dt),
             "Reminder Date": reminder_date,
             "Premium Mode": premium_mode,
+            "Portability company": extracted.get("portability_company", ""),
+            "Portability Year": extracted.get("portability_year", ""),
             "Policy Status": policy_status,
             "Remark": "",
             "PYP Number": str(extracted["pyp_number"]),
