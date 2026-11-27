@@ -161,7 +161,7 @@ def render_preview_table(
     visible_cols = _filter_preview_columns(columns)
 
     if not enable_highlighter:
-        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=780)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=900)
         return
 
     h_col1, h_col2 = st.columns([3, 1])
@@ -173,7 +173,7 @@ def render_preview_table(
         use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
     if not use_highlight_mode:
-        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=780)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=900)
         return
 
     try:
@@ -181,8 +181,8 @@ def render_preview_table(
         sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(visible_cols)}".encode("utf-8")).hexdigest()[:12]
         storage_key = f"ms_policy_mitra_hl_{sig}"
         html_str = _build_highlighter_html(rows, visible_cols, storage_key, aligned_debug, batch_id, retest_count=retest_count)
-        iframe_height = min(max(420, 120 + len(rows) * 35), 820)
+        iframe_height = min(max(680, 140 + len(rows) * 36), 960)
         components.html(html_str, height=iframe_height, scrolling=False)
     except FileNotFoundError as e:
         st.warning(f"⚠️ {e} — Showing standard table fallback.")
-        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=780)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=900)
