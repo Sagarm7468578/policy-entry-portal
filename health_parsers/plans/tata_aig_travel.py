@@ -22,7 +22,6 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
     data["plan_name"] = "TRAVEL"
     data["sub_type"] = "TRAVEL INSURANCE"
 
-    # 1. Policy Number (International Plus + Student Travel)
     for pat in [
         r"(?i)Policy\s*(?:Certificate\s*)?(?:No\.?|Number)\s*[:\-]?\s*[\r\n\s]*([0-9]{8,16})\b",
         r"(?i)Policy\s*Number\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{8,24})",
@@ -32,9 +31,9 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
             data["policy_number"] = m_pol.group(1).strip()
             break
 
-    # 2. Client Name (Policyholder / Policy Holder / Proposer Name)
     for pat in [
         r"(?i)Policy\s*Holder\s*[\r\n\s]+Name\s*[:\-]?\s*[\r\n\s]*([^\r\n]{3,80})",
+        r"(?i)Name\s*of\s*the\s*Proposer\s*[:\-]\s*[\r\n\s]*([^\r\n]{3,80})",
         r"(?i)Proposer\s*Name\s*[:\-]?\s*[\r\n\s]*([^\r\n]{3,80})",
     ]:
         m_nm = re.search(pat, pdf_text)
@@ -44,7 +43,6 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
-    # 3. Agency (International Plus 3-col table + Student Travel)
     m_ag_tbl = re.search(
         r"(?i)Agent\s*/\s*Intermediary\s*Name\s*[\r\n]+\s*Agent\s*/\s*Intermediary\s*License[\r\n\s]*Code\s*[\r\n]+\s*Agent\s*/\s*Intermediary\s*Contact\s*No\.?\s*[\r\n]+\s*([^\r\n]{3,80})",
         pdf_text,
@@ -60,7 +58,8 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
             data["agency"] = shorten_agency_name(cand)
     else:
         for pat in [
-            r"(?i)Agent\s*/\s*Intermediary\s*Name\s*[:\-]?\s*[\r\n]+\s*([^\r\n]{3,80})",
+            r"(?i)Agent\s*/\s*Intermediary\s*Name\s*[:\-]\s*[\r\n\s]*([^\r\n]{3,80})",
+            r"(?i)Agent\s*/\s*Intermediary\s*Name\s*[\r\n]+\s*([^\r\n]{3,80})",
             r"(?i)Producer\s*Name\s*[:\-]\s*([^\r\n]{3,80})",
             r"(?i)(?:Intermediary|Agent)\s*Name\s*[:\-]\s*([^\r\n]{3,80})",
         ]:
@@ -71,7 +70,6 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
                     data["agency"] = shorten_agency_name(cand)
                     break
 
-    # 4. Inception & Expiry Dates (International Plus + Student Travel)
     date_tok = r"(\d{2}[/\-][A-Za-z0-9]{2,3}[/\-]\d{2,4})"
     m_td = re.search(
         rf"(?i)Travel\s*Dates\s*[\r\n\s]*From\s*[:\-]?\s*[\r\n\s]*{date_tok}[\s\S]{{0,30}}?To\s*[:\-]?\s*[\r\n\s]*{date_tok}",
@@ -105,7 +103,6 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
                 if data["end_dt"]:
                     break
 
-    # 5. Sum Insured
     for pat in [
         r"(?i)(?:Medical\s*)?Sum\s*Insured\s*[:\-]?\s*[\r\n\s]*(?:USD|\$)\s*([\d,]{4,12})",
         r"(?i)Unlimited\s*Sum\s*Insured\s*with\s*(?:USD|\$)\s*([\d,]{4,12})",
@@ -116,10 +113,11 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
             data["sum_insured"] = f"USD {clean_amount(m_si.group(1))}"
             break
 
-    # 6. Total Premium
     for pat in [
+        r"(?i)Final\s*Premium\s*\(\s*post[\-\s]*tax\s*\)\s*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*[\r\n\s]*([\d,]+(?:\.\d+)?)",
         r"(?i)Final\s*Premium\s*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*[\r\n\s]*([\d,]+(?:\.\d+)?)",
         r"(?i)Total\s*Premium\s*(?:Payable|Paid)?\s*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*[\r\n\s]*([\d,]+(?:\.\d+)?)",
+        r"(?i)of\s+amount\s+of\s+(?:Rs\.?|INR|₹)\s*[\r\n\s]*([\d,]+(?:\.\d+)?)",
         r"(?i)Premium\s*:\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
     ]:
         m_p = re.search(pat, pdf_text)
@@ -127,9 +125,8 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
             data["premium"] = clean_amount(m_p.group(1))
             break
 
-    # 7. DOB (Insured Person DOB — ignores Sponsor DOB on Student Travel)
     dobs = []
-    m_ins = re.search(r"(?i)Insured\s+Person\s+Details\s*:?([\s\S]{0,900}?)(?:Nominee\s+Details|$)", pdf_text)
+    m_ins = re.search(r"(?i)Insured\s+Person'?s?\s+Details\s*:?([\s\S]{0,900}?)(?:Nominee\s+Details|$)", pdf_text)
     if m_ins:
         for m_d in re.finditer(r"(?:Male|Female)\s*[\r\n\s]+(\d{2}[/\-]\d{2}[/\-](?:19|20)\d{2})", m_ins.group(1), re.I):
             dt = parse_any_date(m_d.group(1))
@@ -153,7 +150,6 @@ def parse_tata_aig_travel(pdf_text: str) -> dict:
     if dobs:
         data["dob"] = fmt_date(min(dobs))
 
-    # 8. Premium Mode & PYP
     data["premium_mode"] = extract_premium_mode(pdf_text)
     data["pyp_number"] = "FRESH"
     return data
