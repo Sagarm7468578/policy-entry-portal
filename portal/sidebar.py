@@ -12,6 +12,7 @@ from health_parser import (
 )
 from portal.backend import (
     IS_CLOUD,
+    is_admin_user,
     call_backend,
     save_user_sheet_settings,
     fetch_linked_client_master,
@@ -87,13 +88,24 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
         email_line = f"  \n📧 `{st.session_state.user_email}`" if st.session_state.user_email else ""
         st.success(f"👤 **{display_user}**{email_line}  \n📅 Valid Till: **{st.session_state.expiry}**")
 
+        mode_options = [
+            "Mode 1: Cloud Portal (Excel Download)",
+            "Mode 2: Fixed Google Sheet (Upload)",
+            "Mode 3: Drive Folder + Drive Excel (.xlsx)",
+        ]
+        if is_admin_user():
+            mode_options.append("🐞 Bugging Mode (Preview Only)")
+
         default_mode_idx = 2 if (st.session_state.health_folder_url or st.session_state.mode3_excel_url) else (1 if (st.session_state.fixed_sheet_url or st.session_state.local_excel_path) else 0)
         working_mode = st.radio(
             "⚙️ Working Mode",
-            ["Mode 1: Cloud Portal (Excel Download)", "Mode 2: Fixed Google Sheet (Upload)", "Mode 3: Drive Folder + Drive Excel (.xlsx)"],
+            mode_options,
             index=default_mode_idx,
         )
-        is_mode1, is_mode2, is_mode3 = working_mode.startswith("Mode 1"), working_mode.startswith("Mode 2"), working_mode.startswith("Mode 3")
+        is_mode1 = working_mode.startswith("Mode 1")
+        is_mode2 = working_mode.startswith("Mode 2")
+        is_mode3 = working_mode.startswith("Mode 3")
+        is_bugging = working_mode.startswith("🐞") and is_admin_user()
         is_direct_sheet = is_mode2 or is_mode3
         policy_category = st.selectbox(
             "📂 Module / Policy Type",
@@ -108,7 +120,7 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
         )
         st.divider()
 
-        # 1. MODE 3: DRIVE EXCEL + AUTO-FOLDERS
+        # 1. MODE 3 & BUGGING MODE: DRIVE EXCEL + AUTO-FOLDERS
         if is_mode3:
             is_m3_excel_linked = bool(st.session_state.mode3_excel_url)
             with st.expander(f"📊 Mode 3 Drive Excel ({'✅ Linked' if is_m3_excel_linked else '⚪ Not Linked'})", expanded=not is_m3_excel_linked):
@@ -146,6 +158,7 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                                         st.error(s_res.get("message", "Failed to save link."))
                     st.caption("💡 In Google Drive, right-click the `.xlsx` file → Share (Editor) → Copy link and paste above.")
 
+        if is_mode3 or is_bugging:
             _render_category_folder_panel(
                 title="📁 Drive Auto-Folders",
                 caption="Link your main parent folder (`MEDICLAIM` / `MOTOR` / `SME`) or a direct month folder once.",
@@ -391,9 +404,9 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                 "• Blank/Manual column: Enter any custom column name (e.g. `Mail`, `Print`, `Folder`)  \n"
                 "• Rename header: `Client Name => Insured Name`"
             )
-            import_src_url = st.session_state.mode3_excel_url if is_mode3 else st.session_state.fixed_sheet_url
-            import_src_tab = st.session_state.mode3_excel_tab if is_mode3 else st.session_state.fixed_sheet_tab
-            if is_direct_sheet and mode2_target_type == "google_sheet" and import_src_url:
+            import_src_url = st.session_state.mode3_excel_url if (is_mode3 or is_bugging) else st.session_state.fixed_sheet_url
+            import_src_tab = st.session_state.mode3_excel_tab if (is_mode3 or is_bugging) else st.session_state.fixed_sheet_tab
+            if (is_direct_sheet or is_bugging) and mode2_target_type == "google_sheet" and import_src_url:
                 if st.button("📥 Import Headers from Linked Sheet/Excel", use_container_width=True, key="import_sheet_hdrs"):
                     with st.spinner("Reading Row 1 headers..."):
                         imp_hdrs, imp_err = fetch_headers_from_drive_target(import_src_url, import_src_tab)
@@ -452,6 +465,7 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
         "is_mode1": is_mode1,
         "is_mode2": is_mode2,
         "is_mode3": is_mode3,
+        "is_bugging": is_bugging,
         "is_direct_sheet": is_direct_sheet,
         "policy_category": policy_category,
         "mode2_target_type": mode2_target_type,
