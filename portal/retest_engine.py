@@ -28,24 +28,32 @@ def get_skip_pdf_reason(fname: str, is_ok: bool, err_msg: str, debug_info: dict 
     Returns a skip reason if a PDF should be excluded from Excel & Preview Mode:
     1. Scanned / Image-only PDFs
     2. Annexure / Member-List-only PDFs (no premium or policy period — not a Policy Schedule)
+    3. E-Card / Health Card-only PDFs (e.g. employee e-cards bundle — not a Policy Schedule)
     """
     if is_scanned_error(is_ok, err_msg):
         return err_msg or "Scanned / Image PDF (text readable nahi hai)"
 
     raw_text = str((debug_info or {}).get("raw_text") or "")
+    has_schedule_fields = bool(
+        re.search(
+            r"(?i)(?:Total\s*Premium|Gross\s*Premium|Net\s*Premium|Final\s*Premium|Period\s*of\s*Insurance|Policy\s*Period|Commencement\s*Date|Endorsement\s*Number)",
+            raw_text,
+        )
+    )
+
     has_annex_marker = bool(
         re.search(r"(?i)annexure\s+attached\s+to\s+and\s+forming\s+(?:a\s+)?part\s+of", raw_text)
         or re.search(r"(?i)\bannexure\b", str(fname or ""))
     )
-    if has_annex_marker:
-        has_schedule_fields = bool(
-            re.search(
-                r"(?i)(?:Total\s*Premium|Gross\s*Premium|Net\s*Premium|Period\s*of\s*Insurance|Policy\s*Period|Commencement\s*Date)",
-                raw_text,
-            )
-        )
-        if not has_schedule_fields:
-            return "Annexure / Member List PDF (Not a Policy Schedule — Skipped)"
+    if has_annex_marker and not has_schedule_fields:
+        return "Annexure / Member List PDF (Not a Policy Schedule — Skipped)"
+
+    has_ecard_marker = bool(
+        re.search(r"(?i)\b(?:e[\-\s]?cards?|health[\-\s]?cards?|id[\-\s]?cards?)\b", str(fname or ""))
+        or (re.search(r"(?i)Card\s*No\s*[\r\n\s]*:", raw_text) and re.search(r"(?i)Emp\.?\s*ID", raw_text))
+    )
+    if has_ecard_marker and not has_schedule_fields:
+        return "E-Card / Health ID Card PDF (Not a Policy Schedule — Skipped)"
 
     return ""
 
