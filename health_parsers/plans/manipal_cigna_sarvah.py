@@ -13,8 +13,21 @@ from health_parsers.common import (
 def is_manipal_cigna_sarvah(pdf_text: str) -> bool:
     return bool(
         re.search(r"(?i)ManipalCigna\s+Sarvah", pdf_text)
-        or re.search(r"(?i)MCIHLIP26038V|MCIHLIP27040V", pdf_text)
+        or re.search(r"(?i)MCIHLIP25035V|MCIHLIP26038V|MCIHLIP27040V", pdf_text)
     )
+
+
+def _normalize_mc_mode(tok: str) -> str:
+    t = re.sub(r"\s+", "", str(tok or "").upper())
+    if t in ("CHEQUE", "CHQ", "DD"):
+        return "CHEQUE"
+    if t == "CASH":
+        return "CASH"
+    if t in ("ECS", "NACH"):
+        return "AUTO DEBIT"
+    if t:
+        return "ONLINE"
+    return ""
 
 
 def parse_manipal_cigna_sarvah(pdf_text: str) -> dict:
@@ -67,7 +80,7 @@ def parse_manipal_cigna_sarvah(pdf_text: str) -> dict:
         data["end_dt"] = parse_any_date(m_en.group(1))
 
     for pat in [
-        r"(?i)Base\s*Sum\s*Insured\s*\(in\s*₹\)[\s\S]{0,160}?[\r\n]+\s*([\d,]{5,15})",
+        r"(?i)(?:Base\s*)?Sum\s*Insured\s*\(in\s*(?:₹|Rs\.?)\)[\s\S]{0,160}?[\r\n]+\s*([\d,]{5,15})",
         r"(?i)Customer\s*ID[\s\S]{0,400}?(\d{6,10})\s*[\r\n]+\s*(?:0|10000|25000|50000)\s*[\r\n]+",
     ]:
         m_si = re.search(pat, pdf_text)
@@ -78,7 +91,7 @@ def parse_manipal_cigna_sarvah(pdf_text: str) -> dict:
                 break
 
     for pat in [
-        r"(?i)paid\s+the\s+premium\s+of\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
+        r"(?i)paid\s+the\s+premium\s+of\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         r"(?i)Total\s*premium\s*paid\s*\(A\+B\+C\)\s*[\r\n]+\s*([\d,]+(?:\.\d+)?)",
     ]:
         m_p = re.search(pat, pdf_text)
@@ -86,20 +99,15 @@ def parse_manipal_cigna_sarvah(pdf_text: str) -> dict:
             data["premium"] = clean_amount(m_p.group(1))
             break
 
-    m_pm = re.search(
-        r"(?i)Payment\s*Mode\s*[\r\n]+[\s\S]{0,160}?\b(DIRECT\s*DEBIT|ONLINE|UPI|NEFT|RTGS|IMPS|CARD|CHEQUE|CHQ|DD|CASH|ECS|NACH)\b",
-        pdf_text,
-    )
+    # Supports both newer ("Payment Mode -> DIRECTDEBIT") & older ("R003673537\nCHEQUE\nDate\nReceipt\nAmount\nPayment\nMode")
+    mode_tok = r"(DIRECT\s*DEBIT|ONLINE|UPI|NEFT|RTGS|IMPS|CARD|CHEQUE|CHQ|DD|CASH|ECS|NACH)"
+    m_pm = re.search(rf"(?i)Payment\s*[\r\n\s]+Mode\s*[\r\n]+[\s\S]{{0,160}}?\b{mode_tok}\b", pdf_text)
+    if not m_pm:
+        m_pm = re.search(rf"(?i)\bR\d{{6,14}}\s*[\r\n]+\s*{mode_tok}\b[\s\S]{{0,80}}?Payment\s*[\r\n\s]+Mode\b", pdf_text)
+    if not m_pm:
+        m_pm = re.search(rf"(?i)\b{mode_tok}\b[\s\S]{{0,60}}?Date\s*[\r\n]+\s*Receipt\s*[\r\n]+\s*Amount\s*[\r\n]+\s*Payment\s*[\r\n\s]+Mode\b", pdf_text)
     if m_pm:
-        tok = re.sub(r"\s+", "", m_pm.group(1).upper())
-        if tok in ("CHEQUE", "CHQ", "DD"):
-            data["premium_mode"] = "CHEQUE"
-        elif tok == "CASH":
-            data["premium_mode"] = "CASH"
-        elif tok in ("ECS", "NACH"):
-            data["premium_mode"] = "AUTO DEBIT"
-        else:
-            data["premium_mode"] = "ONLINE"
+        data["premium_mode"] = _normalize_mc_mode(m_pm.group(1))
     else:
         data["premium_mode"] = extract_premium_mode(pdf_text)
 
@@ -123,7 +131,7 @@ def parse_manipal_cigna_sarvah(pdf_text: str) -> dict:
             data["pyp_number"] = m_pyp.group(1).strip()
 
     dobs = []
-    m_card = re.search(r"(?i)Customer\s*ID\s*[\r\n]+\s*DOB([\s\S]{0,800}?)(?:Valid\s+From|Claims:|$)", pdf_text)
+    m_card = re.search(r"(?i)(?:Customer\s*ID\s*[\r\n]+\s*DOB|INSURED\s*NAME\s*[\r\n]+\s*DOB)([\s\S]{0,800}?)(?:Valid\s+From|Claims\b|$)", pdf_text)
     if m_card:
         for m_d in re.finditer(r"\b(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})\b", m_card.group(1)):
             dt = parse_any_date(m_d.group(1))
