@@ -36,15 +36,16 @@ def parse_hdfc_optima_secure(pdf_text: str) -> dict:
                 data["policy_number"] = digits
                 break
 
-    # 2. Client Name
+    # 2. Client Name (strips leading ":" BEFORE clean_person_name so "MR." / "MISS." prefixes are cleanly removed)
     for pat in [
-        r"(?i)Policyholder\s*Name\s*[\r\n]+\s*([^\r\n]{3,80})",
-        r"(?i)Policy\s*Holder['’]?s?\s*Name\s*[:\-]?\s*[\r\n\s]*([^\r\n]{3,80})",
+        r"(?i)Policyholder\s*Name\s*[\r\n]*\s*[:\-]?\s*([^\r\n]{3,80})",
+        r"(?i)Policy\s*Holder['’]?s?\s*Name\s*[\r\n]*\s*[:\-]?\s*([^\r\n]{3,80})",
         r"(?i)Dear\s+([^\r\n,]{3,80})",
     ]:
         m_nm = re.search(pat, pdf_text)
         if m_nm:
-            cand = clean_person_name(m_nm.group(1))
+            raw_nm = m_nm.group(1).lstrip(" :-\t")
+            cand = clean_person_name(raw_nm)
             if cand and len(cand) >= 3 and cand not in ("CUSTOMER", "SIR", "MADAM"):
                 data["client_name"] = cand
                 break
@@ -57,7 +58,7 @@ def parse_hdfc_optima_secure(pdf_text: str) -> dict:
     if not m_ag:
         m_ag = re.search(r"(?i)Intermediary\s*Name\s*[:\-]?\s*[\r\n]+\s*([^\r\n]{3,80})", pdf_text)
     if m_ag:
-        raw_ag = re.sub(r"(?i)^\s*(?:AGENT|BROKER|POSP|IMD)\s*[:\-]\s*", "", m_ag.group(1).strip())
+        raw_ag = re.sub(r"(?i)^\s*(?:AGENT|BROKER|POSP|IMD)\s*[:\-]\s*", "", m_ag.group(1).lstrip(" :-\t"))
         cand = shorten_agency_name(clean_person_name(raw_ag))
         if cand and "CODE" not in cand:
             data["agency"] = cand
@@ -65,7 +66,7 @@ def parse_hdfc_optima_secure(pdf_text: str) -> dict:
     # 4. Inception & Expiry Dates
     date_tok = r"(\d{1,2}[/\-][A-Za-z0-9]{1,3}[/\-]\d{2,4})"
     m_per = re.search(
-        rf"(?i)Period\s*of\s*Insurance\s*[\r\n\s]*From\s*(?:[\d:]+\s*hrs\s*on\s*)?{date_tok}[\s\S]{{0,40}}?to\s*(?:[\d:]+\s*hrs\s*on\s*)?{date_tok}",
+        rf"(?i)Period\s*of\s*Insurance\s*[\r\n\s]*[:\-]?\s*From\s*(?:[\d:]+\s*hrs\s*on\s*)?{date_tok}[\s\S]{{0,40}}?to\s*(?:[\d:]+\s*hrs\s*on\s*)?{date_tok}",
         pdf_text,
     )
     if m_per:
@@ -86,7 +87,7 @@ def parse_hdfc_optima_secure(pdf_text: str) -> dict:
     for pat in [
         r"(?i)Base\s*Sum\s*Insured\s*per\s*Insured\s*Person[\s\S]{0,60}?[\r\n]+\s*([\d,]{5,15})\b",
         r"(?i)Sum\s*Insured\s*opted\s*:\s*([\d,]{5,15})\b",
-        r"(?i)Base\s*Sum\s*Insured\s*(?:\(Rs\.?\)|\(₹\))?\s*[:\-]?\s*[\r\n\s]*([\d,]{5,15})\b",
+        r"(?i)Base\s*Sum\s*Insured\s*(?:\(Rs\.?\)|\(₹\)|\(`?\))?\s*[:\-]?\s*[\r\n\s]*([\d,]{5,15})\b",
     ]:
         m_si = re.search(pat, pdf_text)
         if m_si:
@@ -95,12 +96,13 @@ def parse_hdfc_optima_secure(pdf_text: str) -> dict:
                 data["sum_insured"] = amt
                 break
 
-    # 6. Total Premium (inclusive of GST — supports new 2025 80D line & multi-member table sum)
+    # 6. Total Premium (inclusive of GST — handles ₹, Rs., INR, & backtick "`" Rupee font + multiline 80D text)
     for pat in [
-        r"(?i)totalling\s+to\s*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)\s+towards\s+premium",
-        r"(?i)has\s+paid\s*(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d+)?)\s*(?:\([^)]+\))?\s*towards\s+premium",
-        r"(?i)Total\s*Premium\s*(?:Payable|Paid)\s*[:\-]?\s*[\r\n\s]*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)",
-        r"(?i)Gross\s*Premium\s*[\r\n]+\s*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)",
+        r"(?i)received\s+an\s+amount\s+of\s*[\r\n\s]*(?:₹|Rs\.?|INR|`)?\s*([\d,]+(?:\.\d+)?)\s*[\r\n\s]*towards\s+premium",
+        r"(?i)totalling\s+to\s*[\r\n\s]*(?:₹|Rs\.?|INR|`)?\s*([\d,]+(?:\.\d+)?)\s*[\r\n\s]*towards\s+premium",
+        r"(?i)has\s+paid\s*[\r\n\s]*(?:₹|Rs\.?|INR|`)\s*([\d,]+(?:\.\d+)?)\s*(?:\([^)]+\))?\s*towards\s+premium",
+        r"(?i)Total\s*Premium\s*(?:Payable|Paid)\s*[:\-]?\s*[\r\n\s]*(?:₹|Rs\.?|INR|`)?\s*([\d,]+(?:\.\d+)?)",
+        r"(?i)Gross\s*Premium\s*[\r\n]+\s*(?:₹|Rs\.?|INR|`)?\s*([\d,]+(?:\.\d+)?)",
     ]:
         m_p = re.search(pat, pdf_text)
         if m_p:
@@ -111,27 +113,33 @@ def parse_hdfc_optima_secure(pdf_text: str) -> dict:
 
     if not data["premium"]:
         m_tpg = re.search(
-            r"(?i)Total\s*Premium\s*including\s*GST\s*[\r\n]+([\d,\r\n \t]+?)(?:Payment\s*Details|Page\s+\d+|HDFC\s+ERGO|$)",
+            r"(?i)(?:Total\s*)?Premium\s*including\s*(?:applicable\s*)?GST\s*[\r\n]+([\d,.\r\n \t]+?)(?:Payment\s*Details|Page\s+\d+|HDFC\s+ERGO|$)",
             pdf_text,
         )
         if m_tpg:
-            nums = [int(clean_amount(x)) for x in re.findall(r"\b\d{1,3}(?:,\d{2,3})+\b|\b\d{4,7}\b", m_tpg.group(1))]
+            nums = [
+                float(x.replace(",", ""))
+                for x in re.findall(r"\b\d{1,3}(?:,\d{2,3})+(?:\.\d+)?\b|\b\d{4,7}(?:\.\d+)?\b", m_tpg.group(1))
+            ]
             if nums:
-                data["premium"] = str(sum(nums))
+                data["premium"] = str(int(round(sum(nums))))
 
-    # 7. PYP Number
-    m_pyp = re.search(r"(?i)Previous\s*Policy\s*(?:No\.?|Number)?\s*[:\-]?\s*[\r\n\s]*([0-9]{15,20})\b", pdf_text)
-    if m_pyp:
+    # 7. PYP Number (supports 19-digit HDFC, 14-digit Star Health, slash-format Oriental/National, etc.)
+    m_pyp = re.search(
+        r"(?i)Previous\s*Policy\s*(?:No\.?|Number)?\s*[\r\n]*\s*[:\-]\s*([A-Z0-9/\-]{8,30})\b",
+        pdf_text,
+    )
+    if m_pyp and re.search(r"\d{6,}", m_pyp.group(1)):
         data["pyp_number"] = m_pyp.group(1).strip()
 
-    # 8. DOB (Oldest Insured Person — supports straight & curly apostrophe)
+    # 8. DOB (Oldest Insured Person)
     dobs = []
     for m_sec in re.finditer(
-        r"(?i)(?:Insured\s+Person['’]?s?\s+Details\s+and\s+Sum\s+Insured|Insured\s+Name\s*[\r\n]+\s*Member\s+ID)([\s\S]{0,2200})",
+        r"(?i)(?:Insured\s+Person['’]?s?\s+Details\s+and\s+Sum\s+Insured|Insured\s+Name\s*[\r\n]+\s*(?:Member\s+ID|Date\s+Of\s+Birth))([\s\S]{0,2200})",
         pdf_text,
     ):
         for m_d in re.finditer(
-            r"(?i)(?:Male|Female)\s*[\r\n\s]+\d{1,3}\s*[\r\n\s]+(\d{2}[/\-]\d{2}[/\-](?:19|20)\d{2})"
+            r"(?i)(?:Male|Female)\s*[\r\n\s]+(?:\d{1,3}\s*[\r\n\s]+)?(\d{2}[/\-]\d{2}[/\-](?:19|20)\d{2})"
             r"|(\d{2}[/\-]\d{2}[/\-](?:19|20)\d{2})\s*[\r\n\s]+(?:Male|Female|M|F)\b",
             m_sec.group(1),
         ):
