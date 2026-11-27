@@ -86,7 +86,7 @@ function loadFilterState() {
   syncFilterButton();
 }
 
-function getPendingBugRowNumbersText() {
+function getPendingBugRowNumbers() {
   const rowSet = new Set();
   Object.keys(highlights).forEach(k => {
     const entry = highlights[k];
@@ -96,38 +96,45 @@ function getPendingBugRowNumbersText() {
       rowSet.add(rIdx + 1);
     }
   });
-  return Array.from(rowSet).sort((a, b) => a - b).join(", ");
+  return Array.from(rowSet).sort((a, b) => a - b);
 }
 
-function syncPendingRowsToStreamlit(delayMs) {
+function getPendingBugRowNumbersText() {
+  return getPendingBugRowNumbers().join(", ");
+}
+
+function syncPendingRowsToStreamlit(delayMs, pressEnter) {
   if (IS_USER_REPORT) return;
   const rowStr = getPendingBugRowNumbersText();
   const wait = typeof delayMs === "number" ? delayMs : 120;
+  const doEnter = pressEnter !== false;
   setTimeout(() => {
     try {
       const pWin = window.parent;
       const pDoc = pWin && pWin.document;
       if (!pDoc) return;
-      const inp =
-        pDoc.querySelector('input[aria-label="🎯 Re-Test Rows"]') ||
-        pDoc.querySelector('input[placeholder*="Bug Rows"]');
+      const inp = pDoc.querySelector('input[aria-label="🎯 Re-Test Rows"]');
       if (!inp || inp.value === rowStr) return;
       const setter = Object.getOwnPropertyDescriptor(pWin.HTMLInputElement.prototype, "value").set;
       setter.call(inp, rowStr);
       inp.dispatchEvent(new pWin.Event("input", { bubbles: true }));
-      setTimeout(() => {
-        try {
-          inp.dispatchEvent(new pWin.KeyboardEvent("keydown", {
-            key: "Enter",
-            code: "Enter",
-            keyCode: 13,
-            which: 13,
-            bubbles: true,
-            cancelable: true,
-          }));
-          inp.blur();
-        } catch (e) {}
-      }, 60);
+      if (doEnter) {
+        setTimeout(() => {
+          try {
+            inp.dispatchEvent(new pWin.KeyboardEvent("keydown", {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+              which: 13,
+              bubbles: true,
+              cancelable: true,
+            }));
+            inp.blur();
+          } catch (e) {}
+        }, 50);
+      } else {
+        inp.blur();
+      }
     } catch (e) {}
   }, wait);
 }
@@ -188,6 +195,7 @@ function updateBadge() {
   const bugBadge = document.getElementById("bug-count");
   const fixedBadge = document.getElementById("fixed-count");
   const clearGreenBtn = document.getElementById("btn-clear-green");
+  const retestBtn = document.getElementById("btn-retest-inline");
 
   if (IS_USER_REPORT) {
     if (bugBadge) {
@@ -221,6 +229,13 @@ function updateBadge() {
       fixedBadge.style.display = "none";
       clearGreenBtn.style.display = "none";
     }
+  }
+
+  if (retestBtn && !retestBtn.disabled) {
+    const pendingRows = getPendingBugRowNumbers();
+    retestBtn.textContent = pendingRows.length > 0
+      ? ("🔄 Re-Test Preview (" + pendingRows.length + " Selected)")
+      : ("🔄 Re-Test Preview (All " + ROWS.length + ")");
   }
 }
 
