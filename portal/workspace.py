@@ -75,7 +75,6 @@ def _render_latest_batch(ctx, active_headers):
         return
     is_mode3 = ctx["is_mode3"]
     is_bugging = ctx.get("is_bugging", False)
-    is_direct_sheet = ctx["is_direct_sheet"]
     res = st.session_state["last_results"]
 
     st.divider()
@@ -119,8 +118,8 @@ def _render_latest_batch(ctx, active_headers):
         st.warning("The following PDFs were skipped or had extraction issues (excluded from Excel & Preview Mode):")
         st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
-    show_preview = (is_direct_sheet or is_bugging) and bool(res.get("batch_rows"))
-    if show_preview:
+    # Preview Mode runs across ALL modes (Mode 1, Mode 2, Mode 3 + Admin Bugging Mode)
+    if bool(res.get("batch_rows")):
         is_bug_ui = bool(is_admin_user() and (is_bugging or res.get("is_bugging_batch")))
         if is_bug_ui:
             p_hdr1, p_hdr2 = st.columns([3, 1.6])
@@ -145,6 +144,9 @@ def _render_latest_batch(ctx, active_headers):
         else:
             st.subheader("Preview Mode")
 
+        mode_label = res.get("mode_tag") or (
+            "Mode 3 (Drive Excel)" if is_mode3 else ("Mode 2 (Fixed Sheet)" if ctx["is_mode2"] else "Mode 1 (Cloud Portal)")
+        )
         render_preview_table(
             rows=res["batch_rows"],
             columns=res.get("batch_columns") or active_headers,
@@ -152,6 +154,8 @@ def _render_latest_batch(ctx, active_headers):
             enable_highlighter=is_bug_ui,
             debug_list=res.get("debug_list", []),
             retest_count=int(res.get("retest_count", 0)),
+            allow_user_report=not is_bug_ui,
+            mode_tag=mode_label,
         )
 
 
