@@ -20,27 +20,6 @@ HIDDEN_PREVIEW_COLS_NORM = {
     "folder",
 }
 
-_WHEEL_LOCK_JS = """
-(function () {
-  document.addEventListener("wheel", function (e) {
-    var wrap = document.querySelector(".table-wrap");
-    if (!wrap || !wrap.contains(e.target)) {
-      e.preventDefault();
-      return;
-    }
-    var dy = e.deltaY || 0;
-    var dx = e.deltaX || 0;
-    if (Math.abs(dy) >= Math.abs(dx) && dy !== 0) {
-      var atTop = wrap.scrollTop <= 0;
-      var atBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 1;
-      if ((dy < 0 && atTop) || (dy > 0 && atBottom)) {
-        e.preventDefault();
-      }
-    }
-  }, { passive: false });
-})();
-"""
-
 
 def _filter_preview_columns(columns: list) -> list:
     visible = [
@@ -113,6 +92,14 @@ def _load_asset(filename: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _load_bundle_js() -> str:
+    """Loads modular highlighter JS files (state.js, actions.js, table_ui.js) with legacy script.js fallback."""
+    split_files = ("state.js", "actions.js", "table_ui.js")
+    if all((_ASSETS_DIR / f).exists() for f in split_files):
+        return "\n\n".join(_load_asset(f) for f in split_files)
+    return _load_asset("script.js")
+
+
 def _make_report_token(user_id: str, batch_id: str) -> str:
     """Computes a scoped SHA-256 token for submit_bug_report so SECRET_KEY is NEVER exposed to browser JS."""
     secret = str(st.secrets.get("SECRET_KEY", "") or "")
@@ -133,7 +120,7 @@ def _build_highlighter_html(
     reporter_meta: dict = None,
 ) -> str:
     css_code = _load_asset("style.css")
-    js_code = _load_asset("script.js")
+    js_code = _load_bundle_js()
 
     meta = reporter_meta or {}
     payload = {
@@ -202,7 +189,6 @@ def _build_highlighter_html(
         "</div>"
         f"<script>window.POLICY_MITRA_PAYLOAD = {data_json};</script>"
         f"<script>{js_code}</script>"
-        f"<script>{_WHEEL_LOCK_JS}</script>"
         "</body></html>"
     )
 
