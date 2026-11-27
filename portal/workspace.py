@@ -154,7 +154,7 @@ def _render_frozen_header(ctx, active_headers, is_custom_cols, show_status_bar=T
     )
     st.markdown(
         "<div class='pm-sticky-header'>"
-        "  <div class='pm-title'>🛡️ MS.Soft Policy Mitra</div>"
+        "  <div class='pm-title'><span class='pm-title-icon'>🛡️</span><span class='pm-title-text'>MS.Soft Policy Mitra</span></div>"
         "  <div class='pm-subtitle'>All-in-One Insurance Advisor Automation Suite</div>"
         f"  {status_html}"
         "</div>",
