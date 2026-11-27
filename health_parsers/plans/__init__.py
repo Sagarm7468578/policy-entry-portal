@@ -4,6 +4,7 @@ from health_parsers.plans.verified_defaults import apply_verified_defaults
 # Registry: (company_name, module_name, detector_fn_name, parser_fn_name)
 _PLAN_SPECS = [
     ("HDFC ERGO", "hdfc_group_health_endorsement", "is_hdfc_group_health_endorsement", "parse_hdfc_group_health_endorsement"),
+    ("HDFC ERGO", "hdfc_group_health", "is_hdfc_group_health", "parse_hdfc_group_health"),
     ("HDFC ERGO", "hdfc_sarv_suraksha_plus_group", "is_hdfc_sarv_suraksha_plus_group", "parse_hdfc_sarv_suraksha_plus_group"),
     ("HDFC ERGO", "hdfc_optima_restore", "is_hdfc_optima_restore", "parse_hdfc_optima_restore"),
     ("HDFC ERGO", "hdfc_optima_secure", "is_hdfc_optima_secure", "parse_hdfc_optima_secure"),
