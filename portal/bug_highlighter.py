@@ -20,6 +20,27 @@ HIDDEN_PREVIEW_COLS_NORM = {
     "folder",
 }
 
+_WHEEL_LOCK_JS = """
+(function () {
+  document.addEventListener("wheel", function (e) {
+    var wrap = document.querySelector(".table-wrap");
+    if (!wrap || !wrap.contains(e.target)) {
+      e.preventDefault();
+      return;
+    }
+    var dy = e.deltaY || 0;
+    var dx = e.deltaX || 0;
+    if (Math.abs(dy) >= Math.abs(dx) && dy !== 0) {
+      var atTop = wrap.scrollTop <= 0;
+      var atBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 1;
+      if ((dy < 0 && atTop) || (dy > 0 && atBottom)) {
+        e.preventDefault();
+      }
+    }
+  }, { passive: false });
+})();
+"""
+
 
 def _filter_preview_columns(columns: list) -> list:
     visible = [
@@ -138,6 +159,7 @@ def _build_highlighter_html(
         "</div>"
         f"<script>window.POLICY_MITRA_PAYLOAD = {data_json};</script>"
         f"<script>{js_code}</script>"
+        f"<script>{_WHEEL_LOCK_JS}</script>"
         "</body></html>"
     )
 
@@ -161,7 +183,7 @@ def render_preview_table(
     visible_cols = _filter_preview_columns(columns)
 
     if not enable_highlighter:
-        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=740)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=620)
         return
 
     h_col1, h_col2 = st.columns([3, 1])
@@ -173,7 +195,7 @@ def render_preview_table(
         use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
     if not use_highlight_mode:
-        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=740)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=620)
         return
 
     try:
@@ -181,8 +203,8 @@ def render_preview_table(
         sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(visible_cols)}".encode("utf-8")).hexdigest()[:12]
         storage_key = f"ms_policy_mitra_hl_{sig}"
         html_str = _build_highlighter_html(rows, visible_cols, storage_key, aligned_debug, batch_id, retest_count=retest_count)
-        iframe_height = min(max(420, 130 + len(rows) * 34), 760)
+        iframe_height = min(max(360, 120 + len(rows) * 33), 630)
         components.html(html_str, height=iframe_height, scrolling=False)
     except FileNotFoundError as e:
         st.warning(f"⚠️ {e} — Showing standard table fallback.")
-        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=740)
+        st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=620)
