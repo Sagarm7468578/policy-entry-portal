@@ -18,7 +18,7 @@ _FROZEN_HEADER_CSS = """
 <style>
 [data-testid="stMainBlockContainer"],
 .block-container {
-    padding-top: 3.4rem !important;
+    padding-top: 3.7rem !important;
 }
 header[data-testid="stHeader"] {
     background: var(--background-color, #ffffff) !important;
@@ -26,14 +26,14 @@ header[data-testid="stHeader"] {
 [data-testid="stElementContainer"]:has(.pm-sticky-header),
 .element-container:has(.pm-sticky-header) {
     position: sticky !important;
-    top: 3.2rem !important;
+    top: 3.55rem !important;
     z-index: 990 !important;
-    background: var(--background-color, #ffffff) !important;
+    background: transparent !important;
 }
 .pm-sticky-header {
     position: relative;
     background: var(--background-color, #ffffff);
-    padding: 4px 0 10px 0;
+    padding: 8px 14px 10px 14px;
     margin-bottom: 6px;
     border-bottom: 1px solid #e2e8f0;
     box-shadow: 0 3px 8px -4px rgba(15, 23, 42, 0.14);
@@ -79,6 +79,19 @@ header[data-testid="stHeader"] {
 .pm-sep {
     color: #cbd5e1;
     margin: 0 4px;
+}
+/* Hidden bridge controls for toolbar Re-Test Preview button (0px visual space) */
+[data-testid="stElementContainer"]:has(.pm-hidden-retest-marker),
+[data-testid="stElementContainer"]:has(.pm-hidden-retest-marker) + [data-testid="stElementContainer"],
+[data-testid="stElementContainer"]:has(.pm-hidden-retest-marker) + [data-testid="stElementContainer"] + [data-testid="stElementContainer"] {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 </style>
 """
@@ -229,35 +242,24 @@ def _render_latest_batch(ctx, active_headers):
         batch_uid = f"{res['round_no']}_{res['timestamp']}"
 
         if is_bug_ui:
+            st.subheader("🐞 Bugging Preview Mode")
             cached_cnt = len(res.get("retest_pdfs") or [])
-            p_hdr1, p_hdr2, p_hdr3 = st.columns([2.3, 1.3, 1.6])
-            with p_hdr1:
-                st.subheader("🐞 Bugging Preview Mode")
-            with p_hdr2:
-                raw_row_spec = st.text_input(
-                    "🎯 Re-Test Rows",
-                    placeholder="Bug Rows (Auto / Blank = All)",
-                    label_visibility="collapsed",
-                    help="Auto-fills with highlighted 🔴 bug row numbers on Download Bug Pack. Leave blank to re-test all PDFs.",
-                    key=f"retest_rows_inp_{batch_uid}",
-                )
-            target_indices = parse_retest_row_numbers(raw_row_spec, cached_cnt)
-            btn_retest_lbl = (
-                f"🔄 Re-Test Preview ({len(target_indices)} Selected)"
-                if target_indices
-                else f"🔄 Re-Test Preview (All {cached_cnt})"
+            # Hidden bridge controls triggered by the "🔄 Re-Test Preview" button inside the toolbar
+            st.markdown("<div class='pm-hidden-retest-marker'></div>", unsafe_allow_html=True)
+            raw_row_spec = st.text_input(
+                "🎯 Re-Test Rows",
+                label_visibility="collapsed",
+                key=f"retest_rows_inp_{batch_uid}",
             )
-            with p_hdr3:
-                has_cache = bool(res.get("retest_pdfs"))
-                if st.button(
-                    btn_retest_lbl,
-                    use_container_width=True,
-                    disabled=not has_cache,
-                    help="Reloads latest GitHub parser fixes ONLY on selected bug rows (or all PDFs if blank) — fixed 🔴 cells auto-turn 🟢 Green!",
-                    key=f"retest_preview_btn_{batch_uid}",
-                ):
-                    run_preview_retest(ctx, res, target_indices=target_indices or None)
-                    st.rerun()
+            if st.button(
+                "PM_HIDDEN_RETEST_TRIGGER",
+                disabled=not bool(res.get("retest_pdfs")),
+                key=f"retest_preview_btn_{batch_uid}",
+            ):
+                target_indices = parse_retest_row_numbers(raw_row_spec, cached_cnt)
+                run_preview_retest(ctx, res, target_indices=target_indices or None)
+                st.rerun()
+
             if res.get("retest_count", 0) > 0:
                 scope_txt = res.get("last_retest_scope") or ""
                 scope_part = f" — {scope_txt}" if scope_txt else ""
