@@ -30,6 +30,27 @@ def _norm_rate_opt(raw_val, default_str):
     return digits if digits in COMMISSION_RATE_OPTIONS else default_str
 
 
+def _qp_get(key: str, default: str = "") -> str:
+    try:
+        val = st.query_params.get(key, default)
+        if isinstance(val, list):
+            return str(val[0]) if val else default
+        return str(val) if val is not None else default
+    except Exception:
+        return default
+
+
+def _qp_set(key: str, val: str):
+    try:
+        if val:
+            if _qp_get(key, "") != val:
+                st.query_params[key] = val
+        else:
+            st.query_params.pop(key, None)
+    except Exception:
+        pass
+
+
 def _render_category_folder_panel(title, caption, folder_specs, expanded=False, reset_health_scan=False, footer_tip=""):
     linked_cnt = sum(bool(st.session_state[u_key]) for _, u_key, _ in folder_specs)
     badge = f"✅ {linked_cnt}/3 Linked" if linked_cnt > 0 else "⚪ Not Linked"
@@ -51,6 +72,8 @@ def _render_category_folder_panel(title, caption, folder_specs, expanded=False, 
                             st.session_state[url_key] = st.session_state[name_key] = ""
                             if reset_health_scan and url_key == "health_folder_url":
                                 st.session_state.update({"drive_scan_info": None, "drive_last_scan_key": "", "drive_selected_year": "", "drive_selected_month": ""})
+                                _qp_set("yr", "")
+                                _qp_set("mo", "")
                             st.rerun()
                         else:
                             st.error(u_res.get("message", "Failed to unlink folder."))
@@ -71,6 +94,8 @@ def _render_category_folder_panel(title, caption, folder_specs, expanded=False, 
                                         st.session_state[url_key], st.session_state[name_key] = clean_f, v_res.get("folder_name", "")
                                         if reset_health_scan and url_key == "health_folder_url":
                                             st.session_state.update({"drive_scan_info": None, "drive_last_scan_key": "", "drive_selected_year": "", "drive_selected_month": ""})
+                                            _qp_set("yr", "")
+                                            _qp_set("mo", "")
                                         st.rerun()
                                     else:
                                         st.error(s_res.get("message", "Failed to save folder link."))
@@ -93,15 +118,26 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
             "Mode 2: Fixed Google Sheet (Upload)",
             "Mode 3: Drive Folder + Drive Excel (.xlsx)",
         ]
+        mode_codes = ["m1", "m2", "m3"]
         if is_admin_user():
             mode_options.append("🐞 Bugging Mode (Preview Only)")
+            mode_codes.append("bug")
 
-        default_mode_idx = 2 if (st.session_state.health_folder_url or st.session_state.mode3_excel_url) else (1 if (st.session_state.fixed_sheet_url or st.session_state.local_excel_path) else 0)
+        saved_mode_code = _qp_get("mode", "").strip().lower()
+        if saved_mode_code in mode_codes:
+            default_mode_idx = mode_codes.index(saved_mode_code)
+        else:
+            default_mode_idx = 2 if (st.session_state.health_folder_url or st.session_state.mode3_excel_url) else (1 if (st.session_state.fixed_sheet_url or st.session_state.local_excel_path) else 0)
+
         working_mode = st.radio(
             "⚙️ Working Mode",
             mode_options,
             index=default_mode_idx,
+            key="sb_working_mode_radio",
         )
+        chosen_mode_code = mode_codes[mode_options.index(working_mode)]
+        _qp_set("mode", chosen_mode_code)
+
         is_mode1 = working_mode.startswith("Mode 1")
         is_mode2 = working_mode.startswith("Mode 2")
         is_mode3 = working_mode.startswith("Mode 3")
@@ -358,7 +394,7 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
             footer_tip="💡 Linking the main category folder (e.g. `HEALTH`) auto-detects year subfolders (`2026`, `2027`...).",
         )
 
-        # 6. COMMISSION / SHARE % PANEL (USER-CONFIGURABLE 5% TO 25%)
+        # 6. COMMISSION / SHARE % PANEL
         cur_u60 = _norm_rate_opt(st.session_state.health_share_under60, "12")
         cur_p60 = _norm_rate_opt(st.session_state.health_share_60plus, "8")
         with st.expander(f"💰 Share / Commission ({cur_u60}% / {cur_p60}%)", expanded=False):
@@ -456,6 +492,11 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
             for k, v in DEFAULTS.items():
                 st.session_state[k] = v.copy() if isinstance(v, (dict, list)) else v
             st.session_state.pop("last_results", None)
+            st.session_state.pop("active_entry_job", None)
+            try:
+                st.query_params.clear()
+            except Exception:
+                pass
             if was_google and google_configured:
                 st.logout()
             else:
