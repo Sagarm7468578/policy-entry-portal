@@ -161,8 +161,8 @@ html, body {
 /* Full-Height Scrollable Table Container */
 .table-wrap {
   flex: 1 1 auto;
-  height: calc(100vh - 68px);
-  max-height: calc(100vh - 68px);
+  height: calc(100vh - 64px);
+  max-height: calc(100vh - 64px);
   overflow: auto;
   border: 1px solid #cbd5e1;
   border-radius: 10px;
@@ -182,7 +182,7 @@ html, body {
 #preview-table thead th {
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 10;
   background: #1b365d;
   color: #ffffff;
   font-weight: 600;
@@ -202,6 +202,7 @@ html, body {
   cursor: pointer;
   user-select: none;
   color: #111827;
+  background: #ffffff;
   transition: background-color 0.1s ease;
 }
 
@@ -213,16 +214,49 @@ html, body {
   background: #eef2ff;
 }
 
-/* Row Index Column */
-#preview-table th.row-num,
-#preview-table td.row-num,
-#preview-table td.idx-col,
-#preview-table tbody td:first-child {
+/* FREEZE COLUMN 1: Row Number (#) */
+#preview-table th:nth-child(1),
+#preview-table td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
   text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+#preview-table thead th:nth-child(1) {
+  z-index: 25;
+  background: #1b365d;
+}
+
+#preview-table tbody td:nth-child(1) {
+  z-index: 6;
   font-weight: 600;
   color: #475569;
-  min-width: 36px;
   cursor: default;
+}
+
+/* FREEZE COLUMN 2: Client Name */
+#preview-table th:nth-child(2),
+#preview-table td:nth-child(2) {
+  position: sticky;
+  left: 44px;
+  min-width: 185px;
+  border-right: 2px solid #94a3b8;
+  box-shadow: 3px 0 6px -2px rgba(15, 23, 42, 0.15);
+}
+
+#preview-table thead th:nth-child(2) {
+  z-index: 25;
+  background: #1b365d;
+}
+
+#preview-table tbody td:nth-child(2) {
+  z-index: 6;
+  font-weight: 600;
 }
 
 /* Blank / Empty Cell Text */
