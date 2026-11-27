@@ -9,6 +9,7 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NIVA BUPA", "HEALTH RECHARGE"),
     ("NIVA BUPA", "HEALTH COMPANION"),
     ("NIVA BUPA", "ASPIRE"),
+    ("NIVA BUPA", "PERSONAL ACCIDENT"),
     ("HDFC ERGO", "OPTIMA RESTORE"),
     ("HDFC ERGO", "OS"),
     ("HDFC ERGO", "PERSONAL ACCIDENT"),
@@ -188,6 +189,10 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
     if company == "ADITYA BIRLA":
         if re.search(r"(?i)Policy\s*Category\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*\b(?:Fresh|New)\b", pdf_text):
             if not re.search(r"(?i)Portability(?:/Migration)?\s*[\r\n\s]*[:\-]?\s*Yes\b", pdf_text):
+                return True
+    if company == "CARE HEALTH":
+        if re.search(r"(?i)Proposal\s+Form\s*[\-\s]*['\"]?CARE\b|In\s+reference\s+to\s+your\s+online\s+proposal", pdf_text):
+            if not re.search(r"(?i)Portability\s+Details\s+of\s+the\s+Insured|Previous\s+Insurer\s*:", pdf_text):
                 return True
     if company == "ORIENTAL":
         m_o = re.search(
