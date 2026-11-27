@@ -128,10 +128,10 @@ def _render_latest_batch(ctx, active_headers):
             with p_hdr2:
                 has_cache = bool(res.get("retest_pdfs"))
                 if st.button(
-                    "🔄 Re-Test Preview (No Excel Save)",
+                    "🔄 Re-Test Preview",
                     use_container_width=True,
                     disabled=not has_cache,
-                    help="Reloads latest GitHub parser fixes on current batch PDFs without saving to Excel — fixed 🔴 cells auto-turn 🟢 Green!",
+                    help="Reloads latest GitHub parser fixes on current batch PDFs — fixed 🔴 cells auto-turn 🟢 Green!",
                     key=f"retest_preview_btn_{res['round_no']}_{res['timestamp']}",
                 ):
                     run_preview_retest(ctx, res)
@@ -139,7 +139,7 @@ def _render_latest_batch(ctx, active_headers):
             if res.get("retest_count", 0) > 0:
                 st.success(
                     f"🟢 Live Re-Test #{res['retest_count']} complete ({res.get('retest_time', '')}) — "
-                    f"Fixed 🔴 cells automatically turned 🟢 Green! (Zero Excel Save)"
+                    f"Fixed 🔴 cells automatically turned 🟢 Green!"
                 )
         else:
             st.subheader("Preview Mode")
