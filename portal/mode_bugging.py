@@ -62,9 +62,39 @@ _BUG_LIST_WHEEL_LOCK_JS = """
 """
 
 
+def _qp_get(key: str, default: str = "") -> str:
+    try:
+        val = st.query_params.get(key, default)
+        if isinstance(val, list):
+            return str(val[0]) if val else default
+        return str(val) if val is not None else default
+    except Exception:
+        return default
+
+
+def _qp_set(key: str, val: str):
+    try:
+        if val:
+            if _qp_get(key, "") != val:
+                st.query_params[key] = val
+        else:
+            st.query_params.pop(key, None)
+    except Exception:
+        pass
+
+
 def _on_bug_select_all_change():
     st.session_state.drive_pdf_sel_default = bool(st.session_state.get("bug_select_all_cb", True))
     st.session_state.drive_pdf_sel_ver += 1
+
+
+def _cancel_bugging_job():
+    job = st.session_state.pop("active_entry_job", None)
+    done_so_far = job.get("idx", 0) if isinstance(job, dict) else 0
+    total_cnt = len(job.get("target_files", [])) if isinstance(job, dict) else 0
+    st.session_state["entry_cancel_notice"] = (
+        f"🛑 Entry process cancelled ({done_so_far}/{total_cnt} PDFs read)."
+    )
 
 
 def _finalize_bugging_preview(extracted_rows, done_count, error_details, debug_list, retest_pdfs, total_count):
@@ -109,6 +139,69 @@ def _finalize_bugging_preview(extracted_rows, done_count, error_details, debug_l
     }
 
 
+def _step_bugging_job(job):
+    """Processes 1 PDF per rerun so the '🛑 Cancel Entry Process' button stops the batch immediately."""
+    target_files = job["target_files"]
+    total = len(target_files)
+    idx = job["idx"]
+
+    c_prog, c_cancel = st.columns([3.4, 1.2])
+    with c_prog:
+        st.progress(min(idx / max(total, 1), 1.0))
+        if idx < total:
+            st.info(f"🐞 Bugging Preview ({idx + 1}/{total}): **{target_files[idx]['name']}**")
+        else:
+            st.info("🐞 Finalizing Bugging Preview...")
+    with c_cancel:
+        st.button(
+            "🛑 Cancel Entry Process",
+            use_container_width=True,
+            key="btn_cancel_bug_entry",
+            on_click=_cancel_bugging_job,
+        )
+
+    if idx < total:
+        f_meta = target_files[idx]
+        fname, fid = f_meta["name"], f_meta["id"]
+        dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
+        if not dl_res.get("success") or not dl_res.get("content_b64"):
+            job["error_details"].append({
+                "File Name": fname,
+                "Reason": dl_res.get("message", "Could not download PDF from Google Drive."),
+            })
+        else:
+            pdf_bytes = base64.b64decode(dl_res["content_b64"])
+            row_dict, is_ok, err_msg, debug_info = process_health_pdf(
+                fname, pdf_bytes, job["master_df"], accounts_df=job["accounts_df"]
+            )
+            skip_reason = get_skip_pdf_reason(fname, is_ok, err_msg, debug_info)
+            if skip_reason:
+                job["error_details"].append({"File Name": fname, "Reason": skip_reason})
+            else:
+                job["debug_list"].append(debug_info)
+                job["extracted_rows"].append(row_dict)
+                job["retest_pdfs"].append({"file_name": fname, "pdf_bytes": pdf_bytes})
+                if is_ok:
+                    job["done_count"] += 1
+                else:
+                    job["error_details"].append({"File Name": fname, "Reason": err_msg})
+
+        job["idx"] = idx + 1
+        st.rerun()
+        return
+
+    st.session_state.pop("active_entry_job", None)
+    _finalize_bugging_preview(
+        job["extracted_rows"],
+        job["done_count"],
+        job["error_details"],
+        job["debug_list"],
+        job["retest_pdfs"],
+        total,
+    )
+    st.rerun()
+
+
 def render_bugging_workspace(ctx):
     """Admin-only fast Bugging Mode: Drive folder scanner with Preview-only output (zero Excel save)."""
     st.info("🐞 **Bugging Mode (Admin Only)**")
@@ -118,8 +211,22 @@ def render_bugging_workspace(ctx):
         st.warning("📁 Please link your **`MEDICLAIM`** parent folder (or direct month folder) via **Left Sidebar → Drive Auto-Folders → Health**.")
         return
 
+    # Restore last selected Year & Month from URL query params across browser F5 refresh
+    if not st.session_state.drive_selected_year:
+        qp_yr = _qp_get("yr", "").strip()
+        qp_mo = _qp_get("mo", "").strip()
+        if qp_yr:
+            st.session_state.drive_selected_year = qp_yr
+            if qp_mo:
+                st.session_state.drive_selected_month = qp_mo
+
+    curr_job = st.session_state.get("active_entry_job")
+    if curr_job and curr_job.get("mode") != "bugging":
+        st.session_state.pop("active_entry_job", None)
+        curr_job = None
+
     desired_scan_key = f"{active_folder_url}||{st.session_state.drive_selected_year}||{st.session_state.drive_selected_month}"
-    if st.session_state.drive_scan_info is None or st.session_state.drive_last_scan_key != desired_scan_key:
+    if not curr_job and (st.session_state.drive_scan_info is None or st.session_state.drive_last_scan_key != desired_scan_key):
         with st.spinner("Scanning Google Drive folder..."):
             info, f_err = scan_drive_folder_pdfs(
                 st.session_state.user_id,
@@ -133,19 +240,29 @@ def render_bugging_workspace(ctx):
                     st.session_state.health_folder_name = info["root_folder_name"]
                 st.session_state.drive_selected_year = info.get("selected_year", "")
                 st.session_state.drive_selected_month = info.get("selected_month", "")
+                _qp_set("yr", st.session_state.drive_selected_year)
+                _qp_set("mo", st.session_state.drive_selected_month)
                 st.session_state.drive_last_scan_key = f"{active_folder_url}||{st.session_state.drive_selected_year}||{st.session_state.drive_selected_month}"
             else:
                 st.session_state.drive_last_scan_key = desired_scan_key
+
+    cancel_msg = st.session_state.pop("entry_cancel_notice", "")
+    if cancel_msg:
+        st.warning(cancel_msg)
 
     info = st.session_state.drive_scan_info or {}
     hdr1, hdr2 = st.columns([4, 1])
     with hdr1:
         st.subheader(f"🐞 {info.get('active_path') or st.session_state.health_folder_name or 'Linked Drive Folder'}")
     with hdr2:
-        if st.button("🔄 Scan Folder", use_container_width=True, key="bug_rescan_drive_folder"):
+        if st.button("🔄 Scan Folder", use_container_width=True, disabled=bool(curr_job), key="bug_rescan_drive_folder"):
             st.session_state.drive_scan_info, st.session_state.drive_last_scan_key = None, ""
             st.session_state.pop("last_results", None)
             st.rerun()
+
+    if curr_job:
+        _step_bugging_job(curr_job)
+        return
 
     avail_years, avail_months = info.get("available_years", []), info.get("available_months", [])
     if avail_years:
@@ -163,10 +280,14 @@ def render_bugging_workspace(ctx):
 
         if chosen_yr != info.get("selected_year", ""):
             st.session_state.drive_selected_year, st.session_state.drive_selected_month, st.session_state.drive_scan_info = chosen_yr, "", None
+            _qp_set("yr", chosen_yr)
+            _qp_set("mo", "")
             st.session_state.pop("last_results", None)
             st.rerun()
         elif avail_months and chosen_mo != info.get("selected_month", ""):
             st.session_state.drive_selected_month, st.session_state.drive_scan_info = chosen_mo, None
+            _qp_set("yr", chosen_yr)
+            _qp_set("mo", chosen_mo)
             st.session_state.pop("last_results", None)
             st.rerun()
 
@@ -231,39 +352,16 @@ def render_bugging_workspace(ctx):
         key="start_bugging_drive_btn",
     ):
         st.session_state.pop("last_results", None)
-        master_df = get_active_master_df(ctx["manual_master_file"])
-        accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
-        extracted_rows, error_details, debug_list, retest_pdfs = [], [], [], []
-        done_count = 0
-
-        progress, status_text = st.progress(0), st.empty()
-        for idx, f_meta in enumerate(target_files):
-            fname, fid = f_meta["name"], f_meta["id"]
-            status_text.text(f"Bugging Preview ({idx + 1}/{len(target_files)}): {fname}")
-            dl_res = call_backend({"action": "get_drive_pdf", "file_id": fid})
-            if not dl_res.get("success") or not dl_res.get("content_b64"):
-                error_details.append({"File Name": fname, "Reason": dl_res.get("message", "Could not download PDF from Google Drive.")})
-                progress.progress((idx + 1) / len(target_files))
-                continue
-
-            pdf_bytes = base64.b64decode(dl_res["content_b64"])
-            row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
-
-            skip_reason = get_skip_pdf_reason(fname, is_ok, err_msg, debug_info)
-            if skip_reason:
-                error_details.append({"File Name": fname, "Reason": skip_reason})
-            else:
-                debug_list.append(debug_info)
-                extracted_rows.append(row_dict)
-                retest_pdfs.append({"file_name": fname, "pdf_bytes": pdf_bytes})
-                if is_ok:
-                    done_count += 1
-                else:
-                    error_details.append({"File Name": fname, "Reason": err_msg})
-            progress.progress((idx + 1) / len(target_files))
-
-        status_text.empty()
-        progress.empty()
-
-        _finalize_bugging_preview(extracted_rows, done_count, error_details, debug_list, retest_pdfs, len(target_files))
+        st.session_state["active_entry_job"] = {
+            "mode": "bugging",
+            "target_files": target_files,
+            "idx": 0,
+            "master_df": get_active_master_df(ctx["manual_master_file"]),
+            "accounts_df": get_active_accounts_df("health", ctx["manual_acc_files"]),
+            "extracted_rows": [],
+            "error_details": [],
+            "debug_list": [],
+            "retest_pdfs": [],
+            "done_count": 0,
+        }
         st.rerun()
