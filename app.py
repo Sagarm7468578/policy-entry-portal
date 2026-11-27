@@ -1,6 +1,7 @@
 import streamlit as st
 from health_parser import get_custom_schema_info
 from portal.backend import is_admin_user
+from portal.theme import apply_portal_theme
 from portal.state import (
     init_session_state,
     handle_auto_google_login,
@@ -11,6 +12,7 @@ from portal.sidebar import render_sidebar
 from portal.workspace import render_workspace
 
 st.set_page_config(page_title="MS.Soft Policy Mitra", page_icon="🛡️", layout="wide")
+apply_portal_theme()
 
 init_session_state()
 google_configured, google_logged_in, g_email = handle_auto_google_login()
