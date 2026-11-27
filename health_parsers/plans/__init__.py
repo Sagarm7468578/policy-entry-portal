@@ -3,6 +3,7 @@ from health_parsers.plans.verified_defaults import apply_verified_defaults
 
 # Registry: (company_name, module_name, detector_fn_name, parser_fn_name)
 _PLAN_SPECS = [
+    ("HDFC ERGO", "hdfc_group_health_endorsement", "is_hdfc_group_health_endorsement", "parse_hdfc_group_health_endorsement"),
     ("HDFC ERGO", "hdfc_sarv_suraksha_plus_group", "is_hdfc_sarv_suraksha_plus_group", "parse_hdfc_sarv_suraksha_plus_group"),
     ("HDFC ERGO", "hdfc_optima_restore", "is_hdfc_optima_restore", "parse_hdfc_optima_restore"),
     ("HDFC ERGO", "hdfc_optima_secure", "is_hdfc_optima_secure", "parse_hdfc_optima_secure"),
@@ -21,10 +22,13 @@ _PLAN_SPECS = [
     ("STAR HEALTH", "star_family_accident_care", "is_star_family_accident_care", "parse_star_family_accident_care"),
     ("STAR HEALTH", "star_senior_citizens_red_carpet", "is_star_senior_citizens_red_carpet", "parse_star_senior_citizens_red_carpet"),
     ("STAR HEALTH", "star_hospital_cash", "is_star_hospital_cash", "parse_star_hospital_cash"),
+    ("STAR HEALTH", "star_family_health_optima", "is_star_family_health_optima", "parse_star_family_health_optima"),
     ("NIVA BUPA", "niva_bupa_reassure3", "is_niva_bupa_reassure3", "parse_niva_bupa_reassure3"),
     ("NIVA BUPA", "niva_bupa_reassure2", "is_niva_bupa_reassure2", "parse_niva_bupa_reassure2"),
     ("NIVA BUPA", "niva_bupa_health_recharge", "is_niva_bupa_health_recharge", "parse_niva_bupa_health_recharge"),
     ("NATIONAL", "national_parivar_mediclaim", "is_national_parivar_mediclaim", "parse_national_parivar_mediclaim"),
+    ("NATIONAL", "national_senior_citizen", "is_national_senior_citizen", "parse_national_senior_citizen"),
+    ("NATIONAL", "national_personal_accident", "is_national_personal_accident", "parse_national_personal_accident"),
     ("NATIONAL", "national_mediclaim", "is_national_mediclaim", "parse_national_mediclaim"),
     ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
     ("NEW INDIA", "new_india_asha_kiran", "is_new_india_asha_kiran", "parse_new_india_asha_kiran"),
@@ -35,6 +39,8 @@ _PLAN_SPECS = [
     ("ADITYA BIRLA", "aditya_birla_activ_yuva", "is_aditya_birla_activ_yuva", "parse_aditya_birla_activ_yuva"),
     ("IFFCO TOKIO", "iffco_tokio_fhp", "is_iffco_tokio_fhp", "parse_iffco_tokio_fhp"),
     ("TATA AIG", "tata_aig_travel", "is_tata_aig_travel", "parse_tata_aig_travel"),
+    ("ICICI LOMBARD", "icici_lombard_group_health", "is_icici_lombard_group_health", "parse_icici_lombard_group_health"),
+    ("ORIENTAL", "oriental_happy_family_floater", "is_oriental_happy_family_floater", "parse_oriental_happy_family_floater"),
 ]
 
 PLAN_PARSERS = {}
