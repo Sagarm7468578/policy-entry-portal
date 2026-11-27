@@ -174,14 +174,22 @@ def _build_highlighter_html(
             "      <button class='btn pack' onclick='downloadBugPack()'>📥 Download Bug Pack + PDF Text (.txt)</button>"
             "      <button id='btn-clear-green' class='btn clear-green' onclick='clearFixed()' style='display:none;'>🧹 Clear Fixed (🟢)</button>"
             "      <button class='btn danger' onclick='clearAll()'>🗑️ Clear All</button>"
+            f"      <button id='btn-retest-inline' class='btn retest-btn' onclick='triggerRetestPreview()'>🔄 Re-Test Preview (All {len(rows)})</button>"
             "      <span id='status-msg' class='status-msg'></span>"
             "    </div>"
             "  </div>"
         )
 
+    retest_btn_css = (
+        ".btn.retest-btn { background: linear-gradient(135deg, #1d4ed8 0%, #0f766e 100%); "
+        "color: #ffffff; border-color: #1d4ed8; font-weight: 600; }"
+        ".btn.retest-btn:hover { filter: brightness(1.06); }"
+        ".btn.retest-btn:disabled { opacity: 0.65; cursor: wait; }"
+    )
+
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8' />"
-        f"<style>{css_code}</style>"
+        f"<style>{css_code}\n{retest_btn_css}</style>"
         "</head><body>"
         "<div class='container'>"
         f"{toolbar_html}"
@@ -205,7 +213,7 @@ def render_preview_table(
 ):
     """
     Renders Preview Mode table for the current round only (non-essential columns hidden in Preview only).
-    - Admin Bugging Mode (`enable_highlighter=True`): Click-to-highlight 🔴 Bug + 📥 Bug Pack + 🟢 Auto-Fix on Re-Test.
+    - Admin Bugging Mode (`enable_highlighter=True`): Always-on Cell Highlighter + 📥 Bug Pack + 🔄 Inline Re-Test.
     - Production Modes (Mode 1, 2, 3): Clean Preview table + 1-click '🐞 Report Wrong Data' button.
     """
     if not rows:
@@ -213,16 +221,8 @@ def render_preview_table(
 
     visible_cols = _filter_preview_columns(columns)
 
-    # 1. Admin Bugging Mode UI
+    # 1. Admin Bugging Mode UI (Cell Highlighter is compulsory — no toggle needed)
     if enable_highlighter:
-        _, h_col2 = st.columns([3, 1])
-        with h_col2:
-            use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
-
-        if not use_highlight_mode:
-            st.dataframe(pd.DataFrame(rows, columns=visible_cols), use_container_width=True, hide_index=True, height=620)
-            return
-
         try:
             aligned_debug = _align_debug_to_rows(rows, visible_cols, debug_list or [])
             sig = hashlib.md5(f"{batch_id}|{len(rows)}|{','.join(visible_cols)}".encode("utf-8")).hexdigest()[:12]
