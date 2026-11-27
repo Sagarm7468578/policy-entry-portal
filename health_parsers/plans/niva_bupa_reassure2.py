@@ -15,6 +15,7 @@ def is_niva_bupa_reassure2(pdf_text: str) -> bool:
         re.search(r"(?i)ReAssure\s*2\.0", pdf_text)
         or re.search(r"(?i)NBHHLIP26042V", pdf_text)
         or re.search(r"(?i)NBHHLIP23161V", pdf_text)
+        or re.search(r"(?i)NBHHLIP23169V", pdf_text)
     )
 
 
@@ -76,9 +77,9 @@ def parse_niva_bupa_reassure2(pdf_text: str) -> dict:
     if m_en:
         data["end_dt"] = parse_any_date(m_en.group(1))
 
-    # 6. Base Sum Insured
+    # 6. Base Sum Insured (handles normal numeric/Unlimited AND insurer-blank PDFs -> "FILL MANUAL")
     m_si = re.search(
-        r"(?i)Base\s*Sum\s*Insured\s*[\r\n\s]*(Unlimited|(?:INR|Rs\.?|₹)?\s*[\d,]{5,15})",
+        r"(?i)Base\s*Sum\s*Insured[ \t]*[\r\n]+[ \t]*(Unlimited|(?:INR|Rs\.?|₹)[ \t]*[\d,]{5,15}|[\d,]{5,15})\b",
         pdf_text,
     )
     if m_si:
@@ -88,12 +89,13 @@ def parse_niva_bupa_reassure2(pdf_text: str) -> dict:
             if val_si.lower() == "unlimited"
             else clean_amount(re.sub(r"(?i)(?:INR|Rs\.?|₹)", "", val_si))
         )
+    elif re.search(r"(?i)Base\s*Sum\s*Insured\s*[\r\n]+\s*(?:INR|Rs\.?|₹)?[ \t]*[\r\n]+\s*(?:Variant\s*Opted|Plan\s*Opted|Policy\s*Commencement)", pdf_text):
+        data["sum_insured"] = "FILL MANUAL"
 
     # 7. Gross Premium
     for pat in [
-        r"(?i)Gross\s*Premium\s*\(Rs\.?\)\s*[\r\n]+\s*([\d,]+(?:\.\d+)?)",
-        r"(?i)Net\s*Premium\s*/\s*Taxable\s*value\s*\(Rs\.?\)\s*[\r\n]+\s*([\d,]+(?:\.\d+)?)",
-        r"(?i)Gross\s*Premium\s*\(INR\)\s*[\r\n]+\s*([\d,]+(?:\.\d+)?)",
+        r"(?i)Gross\s*Premium\s*\((?:Rs\.?|INR)\)\s*[\r\n]+\s*([\d,]+(?:\.\d+)?)",
+        r"(?i)Net\s*Premium\s*/\s*Taxable\s*value\s*\((?:Rs\.?|INR)\)\s*[\r\n]+\s*([\d,]+(?:\.\d+)?)",
     ]:
         m_p = re.search(pat, pdf_text)
         if m_p:
