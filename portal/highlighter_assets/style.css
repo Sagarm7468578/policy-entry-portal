@@ -73,6 +73,11 @@ html, body {
   border-color: #94a3b8;
 }
 
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .btn.active-red {
   background: #fef2f2;
   border-color: #ef4444;
@@ -104,6 +109,38 @@ html, body {
 
 .btn.pack:hover {
   background: #115e59;
+}
+
+.btn.submit-admin {
+  background: #dc2626;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+
+.btn.submit-admin:hover {
+  background: #b91c1c;
+}
+
+.btn.submit-admin.sent-ok {
+  background: #15803d;
+  border-color: #166534;
+}
+
+.note-input {
+  padding: 5px 10px;
+  font-size: 12.5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  min-width: 240px;
+  max-width: 340px;
+  outline: none;
+  color: #1f2937;
+  background: #f8fafc;
+}
+
+.note-input:focus {
+  border-color: #2563eb;
+  background: #ffffff;
 }
 
 .btn.clear-green {
@@ -159,7 +196,11 @@ html, body {
   margin-left: 4px;
 }
 
-/* Scrollable Table Container (locked inside iframe, no outer page bounce) */
+.status-msg.err-msg {
+  color: #b91c1c;
+}
+
+/* Scrollable Table Container */
 .table-wrap {
   flex: 1 1 auto;
   height: calc(100vh - 64px);
@@ -263,6 +304,7 @@ html, body {
 
 /* Blank / Empty Cell Text */
 #preview-table td.empty,
+#preview-table td.empty-cell,
 #preview-table td.blank,
 .empty-val {
   color: #94a3b8;
