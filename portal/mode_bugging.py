@@ -103,13 +103,16 @@ def _finalize_bugging_preview(extracted_rows, done_count, error_details, debug_l
         "round_excel_bytes": None,
         "err_zip_bytes": None,
         "save_error": "",
-        "save_msg": f"🐞 Bugging Preview Ready ({len(proj_rows)} rows) — No Excel Save & No Drive Status Modified!",
+        "save_msg": "🐞 Bugging Preview Ready.",
         "mode_tag": "Bugging Mode (Preview Only)",
         "is_bugging_batch": True,
     }
 
 
-def _render_drive_bugging_tab(ctx):
+def render_bugging_workspace(ctx):
+    """Admin-only fast Bugging Mode: Drive folder scanner with Preview-only output (zero Excel save)."""
+    st.info("🐞 **Bugging Mode (Admin Only)**")
+
     active_folder_url = st.session_state.health_folder_url
     if not active_folder_url:
         st.warning("📁 Please link your **`MEDICLAIM`** parent folder (or direct month folder) via **Left Sidebar → Drive Auto-Folders → Health**.")
@@ -176,7 +179,7 @@ def _render_drive_bugging_tab(ctx):
         st.info("✅ No PDF files found in this folder. Add Health Policy PDFs and click **Scan Folder**.")
         return
 
-    st.success(f"📄 **{len(all_drive_files)} PDFs** loaded for fast Preview-Only Bugging (Excel & Drive status will NOT be touched).")
+    st.success(f"📄 **{len(all_drive_files)} PDFs** loaded Only For Bugging Purpose.")
 
     list_sig = f"BUG|{info.get('active_folder_id', '')}|{','.join(f['id'] for f in all_drive_files)}"
     if st.session_state.drive_pdf_list_sig != list_sig:
@@ -221,7 +224,7 @@ def _render_drive_bugging_tab(ctx):
         st.caption(f"✅ Selected for Bugging: **{len(target_files)} / {len(all_drive_files)} PDFs**")
 
     if st.button(
-        f"🐞 Run Bugging Preview on {len(target_files)} PDFs (No Excel Save)",
+        f"🐞 Run Bugging Preview on {len(target_files)} PDFs",
         type="primary",
         use_container_width=True,
         disabled=(len(target_files) == 0),
@@ -264,60 +267,3 @@ def _render_drive_bugging_tab(ctx):
 
         _finalize_bugging_preview(extracted_rows, done_count, error_details, debug_list, retest_pdfs, len(target_files))
         st.rerun()
-
-
-def _render_upload_bugging_tab(ctx):
-    uploaded_pdfs = st.file_uploader(
-        "Upload Policy PDFs directly for instant Preview-Only Bugging (No Excel Save)",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key="bugging_quick_uploader",
-    )
-    if uploaded_pdfs:
-        if st.button(
-            f"🐞 Run Bugging Preview on {len(uploaded_pdfs)} Uploaded PDFs (No Excel Save)",
-            type="primary",
-            use_container_width=True,
-            key="start_bugging_upload_btn",
-        ):
-            st.session_state.pop("last_results", None)
-            master_df = get_active_master_df(ctx["manual_master_file"])
-            accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
-            extracted_rows, error_details, debug_list, retest_pdfs = [], [], [], []
-            done_count = 0
-
-            progress, status_text = st.progress(0), st.empty()
-            for idx, f_obj in enumerate(uploaded_pdfs):
-                fname = f_obj.name
-                status_text.text(f"Bugging Preview ({idx + 1}/{len(uploaded_pdfs)}): {fname}")
-                pdf_bytes = f_obj.getvalue()
-                row_dict, is_ok, err_msg, debug_info = process_health_pdf(fname, pdf_bytes, master_df, accounts_df=accounts_df)
-
-                skip_reason = get_skip_pdf_reason(fname, is_ok, err_msg, debug_info)
-                if skip_reason:
-                    error_details.append({"File Name": fname, "Reason": skip_reason})
-                else:
-                    debug_list.append(debug_info)
-                    extracted_rows.append(row_dict)
-                    retest_pdfs.append({"file_name": fname, "pdf_bytes": pdf_bytes})
-                    if is_ok:
-                        done_count += 1
-                    else:
-                        error_details.append({"File Name": fname, "Reason": err_msg})
-                progress.progress((idx + 1) / len(uploaded_pdfs))
-
-            status_text.empty()
-            progress.empty()
-
-            _finalize_bugging_preview(extracted_rows, done_count, error_details, debug_list, retest_pdfs, len(uploaded_pdfs))
-            st.rerun()
-
-
-def render_bugging_workspace(ctx):
-    """Admin-only fast Bugging Mode: Preview-only testing with ZERO Excel save and ZERO Drive status updates."""
-    st.info("🐞 **Bugging Mode (Admin Only):** Fast Preview-Only testing — entries are **NOT** saved to Excel and Drive file statuses stay untouched.")
-    tab_drive, tab_upload = st.tabs(["📁 Drive Folder Bugging", "📤 Quick Upload Bugging"])
-    with tab_drive:
-        _render_drive_bugging_tab(ctx)
-    with tab_upload:
-        _render_upload_bugging_tab(ctx)
