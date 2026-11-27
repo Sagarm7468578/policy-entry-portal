@@ -8,9 +8,13 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NIVA BUPA", "REASSURE 3.0"),
     ("NIVA BUPA", "HEALTH RECHARGE"),
     ("NIVA BUPA", "HEALTH COMPANION"),
+    ("NIVA BUPA", "ASPIRE"),
     ("HDFC ERGO", "OPTIMA RESTORE"),
     ("HDFC ERGO", "OS"),
     ("HDFC ERGO", "PERSONAL ACCIDENT"),
+    ("HDFC ERGO", "ENERGY"),
+    ("HDFC ERGO", "ENERGY (SILVER)"),
+    ("HDFC ERGO", "ENERGY (GOLD)"),
     ("HDFC ERGO", "SARV SURAKSHA PLUS (GROUP)"),
     ("HDFC ERGO", "GROUP HEALTH ENDORSEMENT"),
     ("STAR HEALTH", "FAMILY ACCIDENT CARE"),
@@ -21,6 +25,8 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("STAR HEALTH", "STAR SUPER SURPLUS"),
     ("STAR HEALTH", "FAMILY HEALTH OPTIMA"),
     ("STAR HEALTH", "MEDI CLASSIC (INDIVIDUAL)"),
+    ("STAR HEALTH", "STAR CARDIAC CARE"),
+    ("STAR HEALTH", "STAR HEALTH GAIN"),
     ("IFFCO TOKIO", "FHP"),
     ("ADITYA BIRLA", "ACTIV HEALTH"),
     ("ADITYA BIRLA", "ACTIV YUVA"),
@@ -38,6 +44,8 @@ VERIFIED_SAME_POLICY_ON_RENEWAL = {
     ("MANIPAL CIGNA", "SUPER TOP UP SELECT"),
     ("MANIPAL CIGNA", "SARVAH PARAM"),
     ("MANIPAL CIGNA", "SARVAH UTTAM"),
+    ("CARE HEALTH", "CARE SUPREME"),
+    ("CARE HEALTH", "CARE CLASSIC"),
 }
 
 # Known Indian health/general insurer aliases for comparing Previous Insurer vs Current Company
@@ -68,6 +76,16 @@ _INSURER_CANONICAL_PATTERNS = [
     ("LIBERTY", r"liberty\s+general"),
     ("KOTAK", r"kotak\s+mahindra\s+general|zurich\s+kotak"),
 ]
+
+
+def _clean_agency_suffix(agency: str) -> str:
+    """Strips appended intermediary codes like 'KIRTI LADDHA - HYD0189942' -> 'KIRTI LADDHA'."""
+    s = str(agency or "").strip()
+    if not s:
+        return ""
+    s = re.sub(r"\s*[\-\u2013\u2014]\s*[A-Za-z]{2,6}\d{4,}[A-Za-z0-9]*\s*$", "", s)
+    s = re.sub(r"\s*\(\s*[A-Za-z0-9/\-]{5,}\s*\)\s*$", "", s)
+    return re.sub(r"\s+", " ", s).strip(" .,:-_/")
 
 
 def _canonical_insurer(text: str) -> str:
@@ -188,7 +206,7 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
 def _is_explicit_renewal(pdf_text: str) -> bool:
     return bool(
         re.search(
-            r"(?i)(?:Thank\s+you\s+for\s+renewing|Renewal\s+of\s+Your|Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Renewal|ITGI[\r\n\s]+RENEWAL|\bRenewals\b)",
+            r"(?i)(?:Thank\s+you\s+for\s+renewing|Renewal\s+of\s+Your|Policy\s*Category\s*[:\-]?\s*[\r\n\s]*Renewal|ITGI[\r\n\s]+RENEWAL|\bRenewals\b|applied\s+on\s+this\s+renewal)",
             pdf_text,
         )
     )
@@ -197,6 +215,7 @@ def _is_explicit_renewal(pdf_text: str) -> bool:
 def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
     """
     Applies post-extraction rules for verified plans in health_parsers/plans/:
+    0. Cleans trailing intermediary codes from Agency (e.g. 'KIRTI LADDHA - HYD0189942' -> 'KIRTI LADDHA').
     1. Auto-derives PYP Number for HDFC ERGO & Niva Bupa renewals (or 'FRESH' if renewal count == 00).
     2. Marks confirmed fresh/new policies as 'FRESH' in PYP Number.
     3. If a verified plan renews with the same policy number, copies Policy Number into PYP Number.
@@ -212,6 +231,10 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
     comp = str(company or "").strip().upper()
     plan = str(data.get("plan_name") or "").strip().upper()
     pol_no = str(data.get("policy_number") or "").strip()
+
+    # 0. Clean trailing agent/broker code suffix from Agency so Accounts lookup matches cleanly
+    if data.get("agency"):
+        data["agency"] = _clean_agency_suffix(data["agency"])
 
     # 1. PYP Number rules
     if not str(data.get("pyp_number") or "").strip():
