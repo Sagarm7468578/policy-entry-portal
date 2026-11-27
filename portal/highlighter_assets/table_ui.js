@@ -3,6 +3,9 @@ function toggleFilter() {
   saveFilterState();
   syncFilterButton();
   renderTable();
+  if (onlyHighlighted) {
+    syncPendingRowsToStreamlit(120);
+  }
 }
 
 function toggleCell(rIdx, cIdx, tdEl) {
@@ -42,6 +45,7 @@ function clearFixed() {
     syncFilterButton();
   }
   renderTable();
+  syncPendingRowsToStreamlit(120);
   showStatus("🧹 Cleared fixed (🟢) highlights");
 }
 
@@ -58,6 +62,7 @@ function clearAll() {
     btnSub.textContent = "📨 Submit Bug Report to Admin";
   }
   renderTable();
+  syncPendingRowsToStreamlit(120);
 }
 
 function renderTable() {
