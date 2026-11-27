@@ -112,14 +112,57 @@ function downloadBugPack() {
   a.click();
   document.body.removeChild(a);
 
-  // Auto-switch to Highlighted Rows view & sync bug row numbers to Streamlit Re-Test selector
+  // Auto-switch to Highlighted Rows view & sync bug row numbers to hidden Streamlit Re-Test bridge
   onlyHighlighted = true;
   saveFilterState();
   syncFilterButton();
   renderTable();
-  syncPendingRowsToStreamlit(350);
+  syncPendingRowsToStreamlit(350, false);
 
   showStatus("✅ Downloaded (" + rowIndices.length + " pending entries)");
+}
+
+function triggerRetestPreview() {
+  if (IS_USER_REPORT) return;
+  const retestBtn = document.getElementById("btn-retest-inline");
+  if (retestBtn) {
+    retestBtn.disabled = true;
+    retestBtn.textContent = "⏳ Re-Testing...";
+  }
+  try {
+    const pWin = window.parent;
+    const pDoc = pWin && pWin.document;
+    if (!pDoc) return;
+
+    const rowStr = getPendingBugRowNumbersText();
+    const inp = pDoc.querySelector('input[aria-label="🎯 Re-Test Rows"]');
+    if (inp && inp.value !== rowStr) {
+      const setter = Object.getOwnPropertyDescriptor(pWin.HTMLInputElement.prototype, "value").set;
+      setter.call(inp, rowStr);
+      inp.dispatchEvent(new pWin.Event("input", { bubbles: true }));
+      inp.blur();
+    }
+
+    setTimeout(() => {
+      const buttons = pDoc.querySelectorAll("button");
+      for (let i = 0; i < buttons.length; i++) {
+        if ((buttons[i].textContent || "").indexOf("PM_HIDDEN_RETEST_TRIGGER") !== -1) {
+          buttons[i].click();
+          return;
+        }
+      }
+      if (retestBtn) {
+        retestBtn.disabled = false;
+        updateBadge();
+      }
+      showStatus("⚠️ Re-Test trigger not ready — please refresh once.", true);
+    }, 90);
+  } catch (e) {
+    if (retestBtn) {
+      retestBtn.disabled = false;
+      updateBadge();
+    }
+  }
 }
 
 async function submitBugReportToAdmin() {
