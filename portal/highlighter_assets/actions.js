@@ -112,11 +112,12 @@ function downloadBugPack() {
   a.click();
   document.body.removeChild(a);
 
-  // Auto-switch to Highlighted Rows view & persist it across Re-Test Preview
+  // Auto-switch to Highlighted Rows view & sync bug row numbers to Streamlit Re-Test selector
   onlyHighlighted = true;
   saveFilterState();
   syncFilterButton();
   renderTable();
+  syncPendingRowsToStreamlit(350);
 
   showStatus("✅ Downloaded (" + rowIndices.length + " pending entries)");
 }
