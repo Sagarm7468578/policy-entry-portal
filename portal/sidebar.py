@@ -1,3 +1,4 @@
+import html as _html
 import streamlit as st
 from health_parser import (
     build_sample_master_bytes,
@@ -21,14 +22,92 @@ from portal.sidebar_config import (
     render_custom_columns_panel,
 )
 
+_FROZEN_SIDEBAR_USER_CSS = """
+<style>
+section[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.pm-sb-user-wrap),
+section[data-testid="stSidebar"] .element-container:has(.pm-sb-user-wrap) {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 990 !important;
+    background: var(--secondary-background-color, #f0f2f6) !important;
+}
+.pm-sb-user-wrap {
+    position: relative;
+    background: var(--secondary-background-color, #f0f2f6);
+    padding: 6px 0 8px 0;
+    margin-bottom: 4px;
+}
+.pm-sb-user-wrap::before {
+    content: "";
+    position: absolute;
+    left: -1.5rem;
+    right: -1.5rem;
+    top: -2.5rem;
+    height: 2.5rem;
+    background: var(--secondary-background-color, #f0f2f6);
+    pointer-events: none;
+}
+.pm-sb-user-card {
+    background: #e8f5ee;
+    border: 1px solid #bbf7d0;
+    border-radius: 0.5rem;
+    padding: 10px 12px;
+    color: #14532d;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    box-shadow: 0 3px 8px -4px rgba(15, 23, 42, 0.16);
+}
+.pm-sb-user-name {
+    font-weight: 700;
+    word-break: break-word;
+}
+.pm-sb-user-email {
+    margin-top: 2px;
+    font-size: 0.8rem;
+    word-break: break-all;
+}
+.pm-sb-user-email code {
+    background: rgba(255, 255, 255, 0.72);
+    color: #0f766e;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+.pm-sb-user-exp {
+    margin-top: 3px;
+    font-size: 0.84rem;
+}
+</style>
+"""
+
+
+def _render_frozen_user_card():
+    display_user = _html.escape(str(st.session_state.user_name or st.session_state.user_id or ""))
+    raw_email = str(st.session_state.user_email or "").strip()
+    expiry_txt = _html.escape(str(st.session_state.expiry or ""))
+    email_html = (
+        f"<div class='pm-sb-user-email'>📧 <code>{_html.escape(raw_email)}</code></div>"
+        if raw_email
+        else ""
+    )
+    st.markdown(_FROZEN_SIDEBAR_USER_CSS, unsafe_allow_html=True)
+    st.markdown(
+        "<div class='pm-sb-user-wrap'>"
+        "  <div class='pm-sb-user-card'>"
+        f"    <div class='pm-sb-user-name'>👤 {display_user}</div>"
+        f"    {email_html}"
+        f"    <div class='pm-sb-user-exp'>📅 Valid Till: <strong>{expiry_txt}</strong></div>"
+        "  </div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
 
 def render_sidebar(active_headers, is_custom_cols, google_configured):
     mode2_target_type = "google_sheet"
 
     with st.sidebar:
-        display_user = st.session_state.user_name or st.session_state.user_id
-        email_line = f"  \n📧 `{st.session_state.user_email}`" if st.session_state.user_email else ""
-        st.success(f"👤 **{display_user}**{email_line}  \n📅 Valid Till: **{st.session_state.expiry}**")
+        _render_frozen_user_card()
 
         mode_options = [
             "Mode 1: Cloud Portal (Excel Download)",
