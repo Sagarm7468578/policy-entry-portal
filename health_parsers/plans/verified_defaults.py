@@ -3,6 +3,7 @@ import re
 # Plans verified during bugging where Premium Mode may genuinely be absent in the insurer PDF
 # (Only applied if parser found blank — if ONLINE/CHEQUE/CASH is printed, that real value is kept!)
 VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
+    ("NIVA BUPA", "REASSURE"),
     ("NIVA BUPA", "REASSURE 2.0"),
     ("NIVA BUPA", "REASSURE 3.0"),
     ("NIVA BUPA", "HEALTH RECHARGE"),
