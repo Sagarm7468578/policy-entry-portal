@@ -23,7 +23,6 @@ def parse_care_supreme(pdf_text: str) -> dict:
     data["plan_name"] = "CARE SUPREME"
     data["sub_type"] = "MEDICLAIM"
 
-    # 1. Policy Number
     for pat in [
         r"(?i)Policy\s*No\.?\s*[:\-]?\s*[\r\n\s]*([0-9]{7,16})\b",
         r"(?i)Policy\s*Number\s*[:\-]?\s*[\r\n\s]*([0-9]{7,16})\b",
@@ -33,7 +32,6 @@ def parse_care_supreme(pdf_text: str) -> dict:
             data["policy_number"] = m_pol.group(1).strip()
             break
 
-    # 2. Client Name
     for pat in [
         r"(?i)Policyholder\s*[\r\n]+\s*Gender\s*[\r\n]+\s*Date\s*Of\s*Birth\s*[\r\n]+\s*Client\s*ID\s*[\r\n]+\s*([^\r\n]{3,80})",
         r"(?i)Dear\s+([^\r\n,]{3,80})",
@@ -45,7 +43,6 @@ def parse_care_supreme(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
-    # 3. Agency
     m_ag = re.search(
         r"(?i)Intermediary\s*Details\s*[\r\n]+\s*Name\s*[\r\n]+\s*Code\s*[\r\n]+\s*Contact\s*Details\s*[\r\n]+\s*([^\r\n]{3,80})",
         pdf_text,
@@ -55,7 +52,6 @@ def parse_care_supreme(pdf_text: str) -> dict:
         if cand and len(cand) >= 2:
             data["agency"] = shorten_agency_name(cand)
 
-    # 4. Inception & Expiry Dates
     date_tok = r"(\d{2}[/\-][A-Za-z0-9]{2,3}[/\-]\d{2,4})"
     m_st = re.search(rf"(?i)Policy\s*Period\s*\-\s*Start\s*Date\s*[\r\n\s]*(?:[\d:]+\s*hrs\s*)?{date_tok}", pdf_text)
     if m_st:
@@ -69,9 +65,8 @@ def parse_care_supreme(pdf_text: str) -> dict:
             data["start_dt"] = data["start_dt"] or parse_any_date(m_pp.group(1))
             data["end_dt"] = data["end_dt"] or parse_any_date(m_pp.group(2))
 
-    # 5. Sum Insured
     m_ins = re.search(
-        r"(?i)Details\s+of\s+Insured\s+Person([\s\S]{0,1400}?)(?:Medical\s+History|Contact\s+details|Intermediary\s+Details|Schedule\s+of\s+Benefits|$)",
+        r"(?i)Details\s+of\s+Insured\s+Person([\s\S]{0,1600}?)(?:Details\s+of\s+Cover|Medical\s+History|Contact\s+details|Intermediary\s+Details|Schedule\s+of\s+Benefits|$)",
         pdf_text,
     )
     if m_ins:
@@ -84,7 +79,6 @@ def parse_care_supreme(pdf_text: str) -> dict:
         if m_si2:
             data["sum_insured"] = clean_amount(m_si2.group(1))
 
-    # 6. Total Premium
     for pat in [
         r"(?i)Premium\s*Paid\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         r"(?i)([\d,]+(?:\.\d{2}))\s*[\r\n]+\s*Total\b",
@@ -94,7 +88,7 @@ def parse_care_supreme(pdf_text: str) -> dict:
             data["premium"] = clean_amount(m_p.group(1))
             break
 
-    # 7. PYP Number (Portability Expiry Policy Number OR Renewal Previous Policy Number)
+    # PYP Number: (a) Portability table OR (b) Renewal "Previous Insurer Details" first row
     m_port = re.search(
         r"(?i)Portability\s+Details\s+of\s+the\s+Insured([\s\S]{0,1400}?)(?:Continuity\s+Benefit|Add-on\s+Policy|For\s+Care\s+Health|$)",
         pdf_text,
@@ -108,23 +102,36 @@ def parse_care_supreme(pdf_text: str) -> dict:
             data["pyp_number"] = m_exp_pol.group(1).strip()
 
     if not data["pyp_number"]:
-        m_pyp = re.search(r"(?i)Previous\s*Policy\s*(?:No\.?|Number)\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{6,30})", pdf_text)
+        m_prev_sec = re.search(
+            r"(?i)Previous\s+Insurer\s+Details\s+of\s+the\s+Insured([\s\S]{0,1200}?)(?:For\s+Care\s+Health|Service\s+Branch|$)",
+            pdf_text,
+        )
+        if m_prev_sec:
+            m_first_pyp = re.search(
+                r"(?i)([A-Z0-9/\-]{7,30})\s*[\r\n]+\s*\d{2}\-[A-Za-z]{3}\-\d{4}",
+                m_prev_sec.group(1),
+            )
+            if m_first_pyp and re.search(r"\d{6,}", m_first_pyp.group(1)):
+                data["pyp_number"] = m_first_pyp.group(1).strip()
+
+    if not data["pyp_number"]:
+        m_pyp = re.search(r"(?i)Previous\s*Policy\s*(?:No\.?|Number)\s*[:\-]\s*([A-Z0-9/\-]{6,30})", pdf_text)
         if m_pyp and re.search(r"\d{5,}", m_pyp.group(1)):
             data["pyp_number"] = m_pyp.group(1).strip()
 
-    # 8. DOB (Oldest Insured Person)
+    # DOB: supports both Fresh/Port ("RELATION\nDOB") and Renewal ("DOB\nRELATION")
     dobs = []
     if m_ins:
         for m_d in re.finditer(
-            r"(?i)(?:MEMBER|SELF|SPOUSE|SON|DAUGHTER|FATHER|MOTHER)\s*[\r\n]+\s*(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})",
+            r"(?i)(?:MEMBER|SELF|SPOUSE|SON|DAUGHTER|FATHER|MOTHER)\s*[\r\n]+\s*(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})"
+            r"|(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})\s*[\r\n]+\s*(?:MEMBER|SELF|SPOUSE|SON|DAUGHTER|FATHER|MOTHER)\b",
             m_ins.group(1),
         ):
-            dt = parse_any_date(m_d.group(1))
+            dt = parse_any_date(m_d.group(1) or m_d.group(2))
             if dt and dt.year >= 1920:
                 dobs.append(dt)
     if dobs:
         data["dob"] = fmt_date(min(dobs))
 
-    # 9. Premium Mode
     data["premium_mode"] = extract_premium_mode(pdf_text)
     return data
