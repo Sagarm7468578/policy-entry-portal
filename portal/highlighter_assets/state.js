@@ -86,6 +86,52 @@ function loadFilterState() {
   syncFilterButton();
 }
 
+function getPendingBugRowNumbersText() {
+  const rowSet = new Set();
+  Object.keys(highlights).forEach(k => {
+    const entry = highlights[k];
+    if (!entry || entry.state !== "red") return;
+    const rIdx = parseInt(k.split("||")[0], 10);
+    if (!isNaN(rIdx) && rIdx >= 0 && rIdx < ROWS.length) {
+      rowSet.add(rIdx + 1);
+    }
+  });
+  return Array.from(rowSet).sort((a, b) => a - b).join(", ");
+}
+
+function syncPendingRowsToStreamlit(delayMs) {
+  if (IS_USER_REPORT) return;
+  const rowStr = getPendingBugRowNumbersText();
+  const wait = typeof delayMs === "number" ? delayMs : 120;
+  setTimeout(() => {
+    try {
+      const pWin = window.parent;
+      const pDoc = pWin && pWin.document;
+      if (!pDoc) return;
+      const inp =
+        pDoc.querySelector('input[aria-label="🎯 Re-Test Rows"]') ||
+        pDoc.querySelector('input[placeholder*="Bug Rows"]');
+      if (!inp || inp.value === rowStr) return;
+      const setter = Object.getOwnPropertyDescriptor(pWin.HTMLInputElement.prototype, "value").set;
+      setter.call(inp, rowStr);
+      inp.dispatchEvent(new pWin.Event("input", { bubbles: true }));
+      setTimeout(() => {
+        try {
+          inp.dispatchEvent(new pWin.KeyboardEvent("keydown", {
+            key: "Enter",
+            code: "Enter",
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+          }));
+          inp.blur();
+        } catch (e) {}
+      }, 60);
+    } catch (e) {}
+  }, wait);
+}
+
 function reconcileHighlights() {
   if (IS_USER_REPORT) return;
   let changed = false;
