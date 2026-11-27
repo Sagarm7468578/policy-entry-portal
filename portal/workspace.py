@@ -1,3 +1,4 @@
+import html as _html
 import os
 import pandas as pd
 import streamlit as st
@@ -13,30 +14,111 @@ from portal.mode12_upload import (
     render_mode1_cloud_sheet,
 )
 
+_FROZEN_HEADER_CSS = """
+<style>
+[data-testid="stMainBlockContainer"],
+.block-container {
+    padding-top: 3.4rem !important;
+}
+header[data-testid="stHeader"] {
+    background: var(--background-color, #ffffff) !important;
+}
+[data-testid="stElementContainer"]:has(.pm-sticky-header),
+.element-container:has(.pm-sticky-header) {
+    position: sticky !important;
+    top: 3.2rem !important;
+    z-index: 990 !important;
+    background: var(--background-color, #ffffff) !important;
+}
+.pm-sticky-header {
+    position: relative;
+    background: var(--background-color, #ffffff);
+    padding: 4px 0 10px 0;
+    margin-bottom: 6px;
+    border-bottom: 1px solid #e2e8f0;
+    box-shadow: 0 3px 8px -4px rgba(15, 23, 42, 0.14);
+}
+.pm-sticky-header::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -4rem;
+    height: 4rem;
+    background: var(--background-color, #ffffff);
+    pointer-events: none;
+}
+.pm-title {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 0 0 2px 0;
+    color: var(--text-color, #0f172a);
+}
+.pm-subtitle {
+    font-size: 0.875rem;
+    color: #64748b;
+    margin: 0 0 6px 0;
+}
+.pm-status-bar {
+    font-size: 0.82rem;
+    line-height: 1.65;
+    color: #475569;
+    margin: 0;
+}
+.pm-status-bar strong {
+    color: var(--text-color, #1e293b);
+}
+.pm-status-bar code {
+    background: var(--secondary-background-color, #f1f5f9);
+    color: #0f766e;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.79rem;
+}
+.pm-sep {
+    color: #cbd5e1;
+    margin: 0 4px;
+}
+</style>
+"""
 
-def _render_status_bar(ctx, active_headers, is_custom_cols):
+
+def _pill(text: str) -> str:
+    return f"<code>{_html.escape(str(text))}</code>"
+
+
+def _build_status_bar_html(ctx, active_headers, is_custom_cols) -> str:
     is_mode2, is_mode3, is_bugging = ctx["is_mode2"], ctx["is_mode3"], ctx.get("is_bugging", False)
     if is_bugging:
         ps_label, ps_status = "Excel Save", "🚫 Disabled (Preview Only)"
     elif is_mode3:
         ps_label = "Drive Excel"
-        ps_status = f"✅ `{st.session_state.mode3_excel_name or 'Drive Excel (.xlsx)'}`" if st.session_state.mode3_excel_url else "⚠️ Not Linked"
+        ps_status = f"✅ {_pill(st.session_state.mode3_excel_name or 'Drive Excel (.xlsx)')}" if st.session_state.mode3_excel_url else "⚠️ Not Linked"
     elif is_mode2:
         ps_label = "Policy Sheet"
         if ctx["mode2_target_type"] == "local_excel":
-            ps_status = f"✅ `{os.path.basename(st.session_state.local_excel_path)}`" if st.session_state.local_excel_path else "⚠️ Not Linked"
+            ps_status = f"✅ {_pill(os.path.basename(st.session_state.local_excel_path))}" if st.session_state.local_excel_path else "⚠️ Not Linked"
         else:
-            ps_status = f"✅ `{st.session_state.fixed_sheet_name or st.session_state.fixed_sheet_tab}`" if st.session_state.fixed_sheet_url else "⚠️ Not Linked"
+            ps_status = f"✅ {_pill(st.session_state.fixed_sheet_name or st.session_state.fixed_sheet_tab)}" if st.session_state.fixed_sheet_url else "⚠️ Not Linked"
     else:
         ps_label, ps_status = "Policy Sheet", "☁️ Cloud Master Sheet"
 
     manual_master = ctx["manual_master_file"]
-    cm_status = (f"✅ {ctx['m_count']} Clients" if not st.session_state.linked_master_error else "⚠️ Link Error") if st.session_state.client_master_url else (f"📄 `{manual_master.name}`" if manual_master else "⚪ Not Linked")
+    cm_status = (
+        (f"✅ {ctx['m_count']} Clients" if not st.session_state.linked_master_error else "⚠️ Link Error")
+        if st.session_state.client_master_url
+        else (f"📄 {_pill(manual_master.name)}" if manual_master else "⚪ Not Linked")
+    )
     h_acc_df = st.session_state.health_accounts_df
     h_acc_cnt = len(h_acc_df) if isinstance(h_acc_df, pd.DataFrame) else 0
     manual_h_acc = ctx["manual_acc_files"]["health"]
-    acc_status = (f"✅ {h_acc_cnt} Rules" if not st.session_state.health_accounts_error else "⚠️ Error") if st.session_state.health_accounts_url else (f"📄 `{manual_h_acc.name}`" if manual_h_acc else "⚪ Not Linked")
-    rn_status = f"✅ `{st.session_state.health_renewal_folder_name or 'Linked'}`" if st.session_state.health_renewal_folder_url else "⚪ Not Linked"
+    acc_status = (
+        (f"✅ {h_acc_cnt} Rules" if not st.session_state.health_accounts_error else "⚠️ Error")
+        if st.session_state.health_accounts_url
+        else (f"📄 {_pill(manual_h_acc.name)}" if manual_h_acc else "⚪ Not Linked")
+    )
+    rn_status = f"✅ {_pill(st.session_state.health_renewal_folder_name or 'Linked')}" if st.session_state.health_renewal_folder_url else "⚪ Not Linked"
     share_status = f"{st.session_state.health_share_under60 or '12'}% / {st.session_state.health_share_60plus or '8'}%"
     cols_status = f"🛠️ {len(active_headers)} Custom Cols" if is_custom_cols else f"🛠️ {len(OUTPUT_COLUMNS)} Default Cols"
     mode_short = (
@@ -44,16 +126,39 @@ def _render_status_bar(ctx, active_headers, is_custom_cols):
         if is_bugging
         else ("Mode 3 (Drive Excel + Folder)" if is_mode3 else ("Mode 2 (Google Sheet)" if is_mode2 else "Mode 1 (Download)"))
     )
-    folder_part = ""
+
+    parts = [f"<strong>Mode:</strong> {_html.escape(mode_short)}"]
     if is_mode3 or is_bugging:
         scan_inf = st.session_state.drive_scan_info or {}
         hf_nm = scan_inf.get("active_path") or st.session_state.health_folder_name or "Health Folder"
-        folder_part = f"  |  **PDF Folder:** {'✅ `' + hf_nm + '`' if st.session_state.health_folder_url else '⚠️ Not Linked'}"
+        folder_val = f"✅ {_pill(hf_nm)}" if st.session_state.health_folder_url else "⚠️ Not Linked"
+        parts.append(f"<strong>PDF Folder:</strong> {folder_val}")
 
-    st.caption(
-        f"**Mode:** {mode_short}{folder_part}  |  **{ps_label}:** {ps_status}  |  "
-        f"**Client Master:** {cm_status}  |  **Accounts:** {acc_status}  |  "
-        f"**Renewal List:** {rn_status}  |  **Share %:** `{share_status}`  |  **Format:** {cols_status}"
+    parts.extend([
+        f"<strong>{_html.escape(ps_label)}:</strong> {ps_status}",
+        f"<strong>Client Master:</strong> {cm_status}",
+        f"<strong>Accounts:</strong> {acc_status}",
+        f"<strong>Renewal List:</strong> {rn_status}",
+        f"<strong>Share %:</strong> {_pill(share_status)}",
+        f"<strong>Format:</strong> {cols_status}",
+    ])
+    return "<span class='pm-sep'>|</span>".join(parts)
+
+
+def _render_frozen_header(ctx, active_headers, is_custom_cols, show_status_bar=True):
+    st.markdown(_FROZEN_HEADER_CSS, unsafe_allow_html=True)
+    status_html = (
+        f"<div class='pm-status-bar'>{_build_status_bar_html(ctx, active_headers, is_custom_cols)}</div>"
+        if show_status_bar
+        else ""
+    )
+    st.markdown(
+        "<div class='pm-sticky-header'>"
+        "  <div class='pm-title'>🛡️ MS.Soft Policy Mitra</div>"
+        "  <div class='pm-subtitle'>All-in-One Insurance Advisor Automation Suite</div>"
+        f"  {status_html}"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
 
@@ -178,17 +283,15 @@ def _render_latest_batch(ctx, active_headers):
 
 
 def render_workspace(ctx, active_headers, is_custom_cols):
-    st.title("🛡️ MS.Soft Policy Mitra")
-    st.caption("All-in-One Insurance Advisor Automation Suite")
-
     if ctx["policy_category"] != "Health Insurance":
+        _render_frozen_header(ctx, active_headers, is_custom_cols, show_status_bar=False)
         st.info(
             f"**{ctx['policy_category']}** module is under development. Please select **Health Insurance** to continue "
             f"(you can already pre-link Motor/SME Drive Folders, Accounts Masters, and Renewal Lists in the sidebar)."
         )
         st.stop()
 
-    _render_status_bar(ctx, active_headers, is_custom_cols)
+    _render_frozen_header(ctx, active_headers, is_custom_cols, show_status_bar=True)
     _render_plan_load_warning()
 
     if ctx["is_mode1"] and st.session_state.saved_health_rows is None:
