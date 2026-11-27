@@ -38,6 +38,7 @@ _PLAN_SPECS = [
     ("NEW INDIA", "new_india_cpa_vehicle", "is_new_india_cpa_vehicle", "parse_new_india_cpa_vehicle"),
     ("NEW INDIA", "new_india_asha_kiran", "is_new_india_asha_kiran", "parse_new_india_asha_kiran"),
     ("NEW INDIA", "new_india_yuva_bharat", "is_new_india_yuva_bharat", "parse_new_india_yuva_bharat"),
+    ("NEW INDIA", "new_india_floater_mediclaim", "is_new_india_floater_mediclaim", "parse_new_india_floater_mediclaim"),
     ("MANIPAL CIGNA", "manipal_cigna_sarvah", "is_manipal_cigna_sarvah", "parse_manipal_cigna_sarvah"),
     ("MANIPAL CIGNA", "manipal_cigna_super_top_up", "is_manipal_cigna_super_top_up", "parse_manipal_cigna_super_top_up"),
     ("ADITYA BIRLA", "aditya_birla_activ_one", "is_aditya_birla_activ_one", "parse_aditya_birla_activ_one"),
