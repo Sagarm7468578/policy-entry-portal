@@ -69,6 +69,32 @@ def get_skip_pdf_reason(fname: str, is_ok: bool, err_msg: str, debug_info: dict 
     return ""
 
 
+def parse_retest_row_numbers(spec: str, total_rows: int) -> list:
+    """
+    Parses 1-based row numbers like '1, 5, 12' or '2-4, 9' into sorted unique 0-based indices.
+    Returns [] if blank or no valid row numbers found (meaning re-test all PDFs).
+    """
+    if not spec or total_rows <= 0:
+        return []
+    indices = set()
+    for part in re.split(r"[,;\s]+", str(spec).strip()):
+        if not part:
+            continue
+        m_rng = re.fullmatch(r"(\d+)\-(\d+)", part)
+        if m_rng:
+            a, b = int(m_rng.group(1)), int(m_rng.group(2))
+            if a > b:
+                a, b = b, a
+            for n in range(a, b + 1):
+                if 1 <= n <= total_rows:
+                    indices.add(n - 1)
+        elif part.isdigit():
+            n = int(part)
+            if 1 <= n <= total_rows:
+                indices.add(n - 1)
+    return sorted(indices)
+
+
 def reload_health_parsers():
     """Evicts cached parser modules and re-imports fresh code from disk for live Re-Test."""
     importlib.invalidate_caches()
@@ -97,42 +123,72 @@ def attach_retest_cache(retest_pdfs: list, extracted_rows: list):
     lr["retest_time"] = ""
 
 
-def run_preview_retest(ctx, res):
-    """Reloads latest parsers and re-parses cached PDFs for Preview Mode ONLY (no Excel/Sheet save)."""
+def run_preview_retest(ctx, res, target_indices=None):
+    """
+    Reloads latest parsers and re-parses ONLY selected bug PDFs (or all cached PDFs if none selected).
+    Updates only those rows in-place so existing row numbering & 🔴/🟢 highlights stay 100% intact.
+    """
     cached_pdfs = res.get("retest_pdfs") or []
     if not cached_pdfs:
         st.warning("No cached PDFs found for this batch — please run a fresh batch once to enable 1-click Re-Test.")
         return
 
-    with st.spinner(f"🔄 Reloading latest parsers & re-testing {len(cached_pdfs)} PDFs (Preview only — No Excel save)..."):
+    existing_rows = list(res.get("batch_rows") or [])
+    existing_debugs = list(res.get("debug_list") or [])
+    valid_indices = sorted({i for i in (target_indices or []) if 0 <= i < len(cached_pdfs)})
+    is_partial = bool(valid_indices) and (len(existing_rows) == len(cached_pdfs))
+
+    indices_to_run = valid_indices if is_partial else list(range(len(cached_pdfs)))
+    cnt = len(indices_to_run)
+    spinner_msg = (
+        f"🔄 Reloading latest parsers & re-testing {cnt} selected bug PDF{'s' if cnt != 1 else ''}..."
+        if is_partial
+        else f"🔄 Reloading latest parsers & re-testing all {cnt} PDFs..."
+    )
+
+    with st.spinner(spinner_msg):
         fresh_process_pdf, fresh_project_schema = reload_health_parsers()
         master_df = get_active_master_df(ctx["manual_master_file"])
         accounts_df = get_active_accounts_df("health", ctx["manual_acc_files"])
 
-        new_rows = []
-        new_debug_list = []
-        for item in cached_pdfs:
+        parsed_rows = []
+        parsed_debugs = []
+        for idx in indices_to_run:
+            item = cached_pdfs[idx]
             row_dict, _is_ok, _err_msg, debug_info = fresh_process_pdf(
                 item["file_name"],
                 item["pdf_bytes"],
                 master_df,
                 accounts_df=accounts_df,
             )
-            new_rows.append(row_dict)
-            new_debug_list.append(debug_info)
+            parsed_rows.append(row_dict)
+            parsed_debugs.append(debug_info)
 
-        if new_rows:
+        if parsed_rows:
             apply_share_commission(
-                new_rows,
+                parsed_rows,
                 st.session_state.health_share_under60,
                 st.session_state.health_share_60plus,
             )
             if st.session_state.health_renewal_folder_url:
-                apply_renewal_list_lookup(new_rows, st.session_state.health_renewal_folder_url)
+                apply_renewal_list_lookup(parsed_rows, st.session_state.health_renewal_folder_url)
 
-        proj_rows, proj_schema = fresh_project_schema(new_rows, st.session_state.health_custom_columns)
-        res["batch_rows"] = proj_rows
-        res["batch_columns"] = proj_schema["headers"]
-        res["debug_list"] = new_debug_list
+        proj_rows, proj_schema = fresh_project_schema(parsed_rows, st.session_state.health_custom_columns)
+
+        if is_partial and (res.get("batch_columns") == proj_schema["headers"]):
+            for pos, idx in enumerate(indices_to_run):
+                existing_rows[idx] = proj_rows[pos]
+                if idx < len(existing_debugs):
+                    existing_debugs[idx] = parsed_debugs[pos]
+            res["batch_rows"] = existing_rows
+            res["debug_list"] = existing_debugs
+            row_labels = ", ".join(str(i + 1) for i in indices_to_run)
+            res["last_retest_scope"] = f"{cnt} Selected PDF{'s' if cnt != 1 else ''} (Rows: {row_labels})"
+        else:
+            res["batch_rows"] = proj_rows
+            res["batch_columns"] = proj_schema["headers"]
+            res["debug_list"] = parsed_debugs
+            res["last_retest_scope"] = f"All {cnt} PDFs"
+
         res["retest_count"] = int(res.get("retest_count", 0)) + 1
         res["retest_time"] = datetime.now(IST).strftime("%I:%M:%S %p")
