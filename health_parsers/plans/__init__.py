@@ -31,6 +31,7 @@ _PLAN_SPECS = [
     ("NIVA BUPA", "niva_bupa_health_recharge", "is_niva_bupa_health_recharge", "parse_niva_bupa_health_recharge"),
     ("NIVA BUPA", "niva_bupa_health_companion", "is_niva_bupa_health_companion", "parse_niva_bupa_health_companion"),
     ("NIVA BUPA", "niva_bupa_aspire", "is_niva_bupa_aspire", "parse_niva_bupa_aspire"),
+    ("NIVA BUPA", "niva_bupa_personal_accident", "is_niva_bupa_personal_accident", "parse_niva_bupa_personal_accident"),
     ("NATIONAL", "national_parivar_mediclaim", "is_national_parivar_mediclaim", "parse_national_parivar_mediclaim"),
     ("NATIONAL", "national_senior_citizen", "is_national_senior_citizen", "parse_national_senior_citizen"),
     ("NATIONAL", "national_personal_accident", "is_national_personal_accident", "parse_national_personal_accident"),
