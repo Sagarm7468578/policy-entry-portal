@@ -220,8 +220,7 @@ def render_preview_table(
     """
     Renders Preview Mode table for the current round only (non-essential columns hidden in Preview only).
     - Admin Bugging Mode (`enable_highlighter=True`): Click-to-highlight 🔴 Bug + 📥 Bug Pack + 🟢 Auto-Fix on Re-Test.
-    - Production Modes (Mode 1, 2, 3): Clean Preview table by default + 1-click '🐞 Report Wrong Data' button
-      allowing users to select wrong cells and email the Bug Pack directly to Admin.
+    - Production Modes (Mode 1, 2, 3): Clean Preview table + 1-click '🐞 Report Wrong Data' button.
     """
     if not rows:
         return
@@ -230,11 +229,7 @@ def render_preview_table(
 
     # 1. Admin Bugging Mode UI
     if enable_highlighter:
-        h_col1, h_col2 = st.columns([3, 1])
-        with h_col1:
-            st.caption(
-                "🖍️ **Bug Highlight Mode:** Click wrong cells to mark 🔴 Bug → update code → click **🔄 Re-Test Preview** to auto-turn fixed cells 🟢 Green."
-            )
+        _, h_col2 = st.columns([3, 1])
         with h_col2:
             use_highlight_mode = st.toggle("🖍️ Cell Highlighter", value=True, key=f"toggle_hl_{batch_id}")
 
