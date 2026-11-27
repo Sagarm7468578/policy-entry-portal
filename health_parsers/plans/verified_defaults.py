@@ -170,6 +170,13 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
         if re.search(r"(?i)Policy\s*Category\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*\b(?:Fresh|New)\b", pdf_text):
             if not re.search(r"(?i)Portability(?:/Migration)?\s*[\r\n\s]*[:\-]?\s*Yes\b", pdf_text):
                 return True
+    if company == "ORIENTAL":
+        m_o = re.search(
+            r"(?i)1\.?\s*Online[\s\S]{0,60}?2\.?\s*Fresh[\s\S]{0,60}?3\.?\s*Renewal\s*[\r\n]+\s*(?:YES|NO)\s*[\r\n]+\s*(YES|NO)\s*[\r\n]+\s*(YES|NO)\b",
+            pdf_text,
+        )
+        if m_o and m_o.group(1).upper() == "YES" and m_o.group(2).upper() == "NO":
+            return True
     if company == "TATA AIG":
         if re.search(r"(?i)Travel\s+Insurance", pdf_text):
             return True
@@ -194,8 +201,10 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
     2. Marks confirmed fresh/new policies as 'FRESH' in PYP Number.
     3. If a verified plan renews with the same policy number, copies Policy Number into PYP Number.
     4. Fills 'FILL MANUAL' ONLY for verified plan fields genuinely absent from the insurer PDF.
-    5. Auto-fills Portability Company (= Current Company Name) & Portability Year (= Inception Year)
-       whenever PDF shows policy was ported from a DIFFERENT previous insurer in the current term.
+    5. Auto-fills Portability Company & Portability Year:
+       - Ported from a DIFFERENT insurer -> Portability Company = Current Company, Portability Year = Inception Year
+       - Fresh / New Business case       -> Portability Company = "NEW", Portability Year = ""
+       - Renewal / Ongoing non-port case -> Portability Company = "NO", Portability Year = ""
     """
     if not isinstance(data, dict):
         return data
@@ -224,13 +233,20 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
         if (comp, plan) in VERIFIED_FILL_MANUAL_PREMIUM_MODE:
             data["premium_mode"] = "FILL MANUAL"
 
-    # 3. Portability Company & Portability Year (when ported from a DIFFERENT previous company)
+    # 3. Portability Company & Portability Year (Ported -> Current Company + Year | Fresh -> "NEW" | Renewal -> "NO")
     if not str(data.get("portability_company") or "").strip():
         prev_ins = _detect_previous_insurer_on_port(comp, pdf_text)
+        pyp_val = str(data.get("pyp_number") or "").strip().upper()
         if prev_ins:
             data["portability_company"] = comp
             start_dt = data.get("start_dt")
             if start_dt and hasattr(start_dt, "year"):
                 data["portability_year"] = str(start_dt.year)
+        elif pyp_val == "FRESH" or _is_explicit_fresh_policy(comp, pdf_text):
+            data["portability_company"] = "NEW"
+            data["portability_year"] = ""
+        else:
+            data["portability_company"] = "NO"
+            data["portability_year"] = ""
 
     return data
