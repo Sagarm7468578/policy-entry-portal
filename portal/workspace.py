@@ -4,7 +4,7 @@ import streamlit as st
 from health_parser import OUTPUT_COLUMNS
 from portal.backend import is_admin_user, load_saved_health_rows
 from portal.bug_highlighter import render_preview_table
-from portal.retest_engine import run_preview_retest
+from portal.retest_engine import run_preview_retest, parse_retest_row_numbers
 from portal.mode3_drive import render_mode3_workspace
 from portal.mode_bugging import render_bugging_workspace
 from portal.mode12_upload import (
@@ -121,25 +121,43 @@ def _render_latest_batch(ctx, active_headers):
     # Preview Mode runs across ALL modes (Mode 1, Mode 2, Mode 3 + Admin Bugging Mode)
     if bool(res.get("batch_rows")):
         is_bug_ui = bool(is_admin_user() and (is_bugging or res.get("is_bugging_batch")))
+        batch_uid = f"{res['round_no']}_{res['timestamp']}"
+
         if is_bug_ui:
-            p_hdr1, p_hdr2 = st.columns([3, 1.6])
+            cached_cnt = len(res.get("retest_pdfs") or [])
+            p_hdr1, p_hdr2, p_hdr3 = st.columns([2.3, 1.3, 1.6])
             with p_hdr1:
                 st.subheader("🐞 Bugging Preview Mode")
             with p_hdr2:
+                raw_row_spec = st.text_input(
+                    "🎯 Re-Test Rows",
+                    placeholder="Bug Rows (Auto / Blank = All)",
+                    label_visibility="collapsed",
+                    help="Auto-fills with highlighted 🔴 bug row numbers on Download Bug Pack. Leave blank to re-test all PDFs.",
+                    key=f"retest_rows_inp_{batch_uid}",
+                )
+            target_indices = parse_retest_row_numbers(raw_row_spec, cached_cnt)
+            btn_retest_lbl = (
+                f"🔄 Re-Test Preview ({len(target_indices)} Selected)"
+                if target_indices
+                else f"🔄 Re-Test Preview (All {cached_cnt})"
+            )
+            with p_hdr3:
                 has_cache = bool(res.get("retest_pdfs"))
                 if st.button(
-                    "🔄 Re-Test Preview",
+                    btn_retest_lbl,
                     use_container_width=True,
                     disabled=not has_cache,
-                    help="Reloads latest GitHub parser fixes on current batch PDFs — fixed 🔴 cells auto-turn 🟢 Green!",
-                    key=f"retest_preview_btn_{res['round_no']}_{res['timestamp']}",
+                    help="Reloads latest GitHub parser fixes ONLY on selected bug rows (or all PDFs if blank) — fixed 🔴 cells auto-turn 🟢 Green!",
+                    key=f"retest_preview_btn_{batch_uid}",
                 ):
-                    run_preview_retest(ctx, res)
+                    run_preview_retest(ctx, res, target_indices=target_indices or None)
                     st.rerun()
             if res.get("retest_count", 0) > 0:
+                scope_txt = res.get("last_retest_scope") or ""
+                scope_part = f" — {scope_txt}" if scope_txt else ""
                 st.success(
-                    f"🟢 Live Re-Test #{res['retest_count']} complete ({res.get('retest_time', '')}) — "
-                    f"Fixed 🔴 cells automatically turned 🟢 Green!"
+                    f"🟢 Live Re-Test #{res['retest_count']} complete ({res.get('retest_time', '')}){scope_part}!"
                 )
         else:
             st.subheader("Preview Mode")
@@ -150,7 +168,7 @@ def _render_latest_batch(ctx, active_headers):
         render_preview_table(
             rows=res["batch_rows"],
             columns=res.get("batch_columns") or active_headers,
-            batch_id=f"{res['round_no']}_{res['timestamp']}",
+            batch_id=batch_uid,
             enable_highlighter=is_bug_ui,
             debug_list=res.get("debug_list", []),
             retest_count=int(res.get("retest_count", 0)),
