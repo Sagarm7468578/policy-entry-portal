@@ -1,6 +1,7 @@
 import base64
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from health_parser import process_health_pdf
 from portal.backend import (
     call_backend,
@@ -14,6 +15,49 @@ from portal.state import (
     save_and_record_batch,
 )
 from portal.retest_engine import get_skip_pdf_reason, attach_retest_cache
+
+_POLICY_LIST_LOCK_CSS = """
+<style>
+[data-testid="stDataFrame"],
+[data-testid="stDataFrame"] .dvn-scroller,
+.stDataFrameGlideDataEditor,
+.dvn-scroller {
+    overscroll-behavior: contain !important;
+}
+</style>
+"""
+
+_POLICY_LIST_WHEEL_LOCK_JS = """
+<script>
+(function () {
+  try {
+    var pDoc = window.parent && window.parent.document;
+    if (!pDoc || window.parent.__policyListWheelLocked) return;
+    window.parent.__policyListWheelLocked = true;
+    pDoc.addEventListener("wheel", function (e) {
+      var target = e.target;
+      if (!target || !target.closest) return;
+      var dfBox = target.closest('[data-testid="stDataFrame"]');
+      if (!dfBox) return;
+      var scroller = dfBox.querySelector(".dvn-scroller");
+      var dy = e.deltaY || 0;
+      var dx = e.deltaX || 0;
+      if (Math.abs(dy) >= Math.abs(dx) && dy !== 0) {
+        if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 1) {
+          e.preventDefault();
+          return;
+        }
+        var atTop = scroller.scrollTop <= 0;
+        var atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+        if ((dy < 0 && atTop) || (dy > 0 && atBottom)) {
+          e.preventDefault();
+        }
+      }
+    }, { passive: false, capture: true });
+  } catch (err) {}
+})();
+</script>
+"""
 
 
 def _on_select_all_pdfs_change():
@@ -114,6 +158,10 @@ def render_mode3_workspace(ctx):
         st.session_state.drive_pdf_sel_default = True
         st.session_state.m3_select_all_cb = True
         st.session_state.drive_pdf_sel_ver += 1
+
+    # Lock wheel-scroll inside Policy List table so outer portal never bounces up/down
+    st.markdown(_POLICY_LIST_LOCK_CSS, unsafe_allow_html=True)
+    components.html(_POLICY_LIST_WHEEL_LOCK_JS, height=0, scrolling=False)
 
     with st.expander(f"📋 Select Policy PDFs ({len(candidate_files)} available)", expanded=True):
         st.checkbox("☑️ Select All PDFs For Entry", key="m3_select_all_cb", on_change=_on_select_all_pdfs_change)
