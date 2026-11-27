@@ -46,6 +46,7 @@ _PLAN_SPECS = [
     ("CARE HEALTH", "care_supreme", "is_care_supreme", "parse_care_supreme"),
     ("IFFCO TOKIO", "iffco_tokio_fhp", "is_iffco_tokio_fhp", "parse_iffco_tokio_fhp"),
     ("TATA AIG", "tata_aig_travel", "is_tata_aig_travel", "parse_tata_aig_travel"),
+    ("BAJAJ ALLIANZ", "bajaj_allianz_travel", "is_bajaj_allianz_travel", "parse_bajaj_allianz_travel"),
     ("ICICI LOMBARD", "icici_lombard_group_health", "is_icici_lombard_group_health", "parse_icici_lombard_group_health"),
     ("ORIENTAL", "oriental_happy_family_floater", "is_oriental_happy_family_floater", "parse_oriental_happy_family_floater"),
 ]
