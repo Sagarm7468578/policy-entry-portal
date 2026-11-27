@@ -3,6 +3,7 @@ const COLS = PAYLOAD.columns || [];
 const ROWS = PAYLOAD.rows || [];
 const DEBUG_LIST = PAYLOAD.debug || [];
 const STORAGE_KEY = PAYLOAD.storageKey;
+const FILTER_KEY = STORAGE_KEY ? (STORAGE_KEY + "_filter") : "";
 const BATCH_ID = PAYLOAD.batchId || "batch";
 const UI_MODE = PAYLOAD.uiMode || "admin";
 const REPORTER = PAYLOAD.reporter || {};
@@ -56,6 +57,36 @@ function saveHighlights() {
   } catch (e) {}
 }
 
+function syncFilterButton() {
+  const bf = document.getElementById("btn-filter");
+  if (!bf) return;
+  bf.className = "btn" + (onlyHighlighted ? " active-filter" : "");
+  bf.textContent = onlyHighlighted
+    ? "📋 Show All Rows"
+    : (IS_USER_REPORT ? "🔎 Selected Rows" : "🔎 Highlighted Rows");
+}
+
+function saveFilterState() {
+  try {
+    if (FILTER_KEY) {
+      window.localStorage.setItem(FILTER_KEY, onlyHighlighted ? "1" : "0");
+    }
+  } catch (e) {}
+}
+
+function loadFilterState() {
+  try {
+    if (FILTER_KEY && window.localStorage.getItem(FILTER_KEY) === "1" && Object.keys(highlights).length > 0) {
+      onlyHighlighted = true;
+    } else {
+      onlyHighlighted = false;
+    }
+  } catch (e) {
+    onlyHighlighted = false;
+  }
+  syncFilterButton();
+}
+
 function reconcileHighlights() {
   if (IS_USER_REPORT) return;
   let changed = false;
@@ -103,13 +134,8 @@ function showStatus(text, isErr) {
 
 function toggleFilter() {
   onlyHighlighted = !onlyHighlighted;
-  const bf = document.getElementById("btn-filter");
-  if (bf) {
-    bf.className = "btn" + (onlyHighlighted ? " active-filter" : "");
-    bf.textContent = onlyHighlighted
-      ? "📋 Show All Rows"
-      : (IS_USER_REPORT ? "🔎 Selected Rows" : "🔎 Highlighted Rows");
-  }
+  saveFilterState();
+  syncFilterButton();
   renderTable();
 }
 
@@ -144,6 +170,11 @@ function clearFixed() {
     if (highlights[k] && highlights[k].state === "green") delete highlights[k];
   });
   saveHighlights();
+  if (Object.keys(highlights).length === 0 && onlyHighlighted) {
+    onlyHighlighted = false;
+    saveFilterState();
+    syncFilterButton();
+  }
   renderTable();
   showStatus("🧹 Cleared fixed (🟢) highlights");
 }
@@ -152,11 +183,8 @@ function clearAll() {
   highlights = {};
   saveHighlights();
   onlyHighlighted = false;
-  const bf = document.getElementById("btn-filter");
-  if (bf) {
-    bf.className = "btn";
-    bf.textContent = IS_USER_REPORT ? "🔎 Selected Rows" : "🔎 Highlighted Rows";
-  }
+  saveFilterState();
+  syncFilterButton();
   const btnSub = document.getElementById("btn-submit-admin");
   if (btnSub) {
     btnSub.disabled = false;
@@ -332,6 +360,12 @@ function downloadBugPack() {
   a.click();
   document.body.removeChild(a);
 
+  // Auto-switch to Highlighted Rows view & persist it across Re-Test Preview
+  onlyHighlighted = true;
+  saveFilterState();
+  syncFilterButton();
+  renderTable();
+
   showStatus("✅ Downloaded (" + rowIndices.length + " pending entries)");
 }
 
@@ -363,7 +397,6 @@ async function submitBugReportToAdmin() {
   showStatus("⏳ Sending bug report to Admin...");
 
   try {
-    // Use text/plain to keep it a simple CORS request (no preflight) for Google Apps Script Web App
     const resp = await fetch(REPORTER.endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -489,4 +522,5 @@ function renderTable() {
 
 loadHighlights();
 reconcileHighlights();
+loadFilterState();
 renderTable();
