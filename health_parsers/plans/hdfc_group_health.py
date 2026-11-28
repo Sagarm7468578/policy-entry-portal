@@ -49,7 +49,8 @@ def parse_hdfc_group_health(pdf_text: str) -> dict:
                 break
 
     for pat in [
-        r"(?i)Item\s*2\.\s*Intermediary\s*Name\s*[\r\n\s]*[:\-]\s*[\r\n\s]*([^\r\n]{2,90})",
+        r"(?i)Item\s*2\.\s*(?:Intermediary|Broker/Agent|Agent/Broker)\s*Name\s*[\r\n\s]*[:\-]\s*[\r\n\s]*([^\r\n]{2,90})",
+        r"(?i)Agent\s*Name\s*[:\-]\s*([^\r\n]{2,90})",
         r"(?i)Intermediary\s*Name\s*[:\-]\s*[\r\n\s]*([^\r\n]{2,90})",
         r"(?i)Broker\s*Name\s*[:\-]\s*[\r\n\s]*([^\r\n]{2,90})",
     ]:
@@ -70,13 +71,14 @@ def parse_hdfc_group_health(pdf_text: str) -> dict:
         data["start_dt"] = parse_any_date(m_per.group(1))
         data["end_dt"] = parse_any_date(m_per.group(2))
 
+    # Sum Insured from Summary of Lives Covered (supports BOTH "3,00,000" and plain "300000")
     m_lives = re.search(
-        r"(?i)Summary\s+of\s+Lives\s+Covered([\s\S]{0,600}?)(?:Grand\s+Total|12\.3\s+Details|$)",
+        r"(?i)Summary\s+of\s+Lives\s+Covered([\s\S]{0,800}?)(?:Grand\s+Total|12\.3\s+Details|$)",
         pdf_text,
     )
     if m_lives:
-        amts = [clean_amount(a) for a in re.findall(r"\b\d{1,3}(?:,\d{2,3})+\b", m_lives.group(1))]
-        amts = [int(a) for a in amts if a.isdigit() and int(a) >= 50000]
+        amts = [clean_amount(a) for a in re.findall(r"\b\d{1,3}(?:,\d{2,3})+\b|\b\d{5,9}\b", m_lives.group(1))]
+        amts = [int(a) for a in amts if a.isdigit() and 50000 <= int(a) <= 500000000]
         if amts:
             data["sum_insured"] = str(max(amts))
 
