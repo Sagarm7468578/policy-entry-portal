@@ -15,6 +15,7 @@ from portal.state import (
     get_active_accounts_df,
 )
 from portal.retest_engine import get_skip_pdf_reason
+from portal.bug_pack_tester import render_bug_pack_tester
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -202,10 +203,7 @@ def _step_bugging_job(job):
     st.rerun()
 
 
-def render_bugging_workspace(ctx):
-    """Admin-only fast Bugging Mode: Drive folder scanner with Preview-only output (zero Excel save)."""
-    st.info("🐞 **Bugging Mode (Admin Only)**")
-
+def _render_drive_bugging_tab(ctx):
     active_folder_url = st.session_state.health_folder_url
     if not active_folder_url:
         st.warning("📁 Please link your **`MEDICLAIM`** parent folder (or direct month folder) via **Left Sidebar → Drive Auto-Folders → Health**.")
@@ -365,3 +363,12 @@ def render_bugging_workspace(ctx):
             "done_count": 0,
         }
         st.rerun()
+
+
+def render_bugging_workspace(ctx):
+    """Admin-only Bugging Mode: Tab 1 = Drive Folder Bugging, Tab 2 = Zero-PDF User Bug Pack (.txt) Verifier."""
+    tab_drive, tab_pack = st.tabs(["📁 Drive Folder Bugging", "🧪 Test User Bug Pack (.txt)"])
+    with tab_drive:
+        _render_drive_bugging_tab(ctx)
+    with tab_pack:
+        render_bug_pack_tester(ctx)
