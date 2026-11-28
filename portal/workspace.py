@@ -5,6 +5,7 @@ import streamlit as st
 from health_parser import OUTPUT_COLUMNS
 from portal.backend import is_admin_user, load_saved_health_rows
 from portal.bug_highlighter import render_preview_table
+from portal.bug_pack_tester import render_resolved_bug_banner
 from portal.retest_engine import run_preview_retest, parse_retest_row_numbers
 from portal.mode3_drive import render_mode3_workspace
 from portal.mode_bugging import render_bugging_workspace
@@ -295,6 +296,8 @@ def render_workspace(ctx, active_headers, is_custom_cols):
 
     _render_frozen_header(ctx, active_headers, is_custom_cols, show_status_bar=True)
     _render_plan_load_warning()
+    if not ctx.get("is_bugging"):
+        render_resolved_bug_banner()
 
     if ctx["is_mode1"] and st.session_state.saved_health_rows is None:
         with st.spinner("Loading your saved Health Master Sheet..."):
