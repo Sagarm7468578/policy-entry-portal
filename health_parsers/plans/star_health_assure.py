@@ -70,7 +70,9 @@ def _extract_star_agency(pdf_text: str) -> str:
                 parts = [s] + collect_continuation(idx)
                 return shorten_agency_name(clean_person_name(" ".join(parts)))
 
-    return ""
+    # Intermediary section exists in Star PDF, but Intermediary Name was left blank by Star Health
+    # Return "FILL MANUAL" so generic fallback NEVER picks up Page 1's "as indicated by you"
+    return "FILL MANUAL"
 
 
 def parse_star_health_assure(pdf_text: str) -> dict:
@@ -148,7 +150,7 @@ def parse_star_health_assure(pdf_text: str) -> dict:
     )
     if not data["sum_insured"] and m_tbl:
         tbl_txt = m_tbl.group(1)
-        m_after_id = re.search(r"\d{2,}\-\d+\s*[\r\n]+\s*([\d,]{5,15})\b", tbl_txt)
+        m_after_id = re.search(r"\d+\-\d+\s*[\r\n]+\s*([\d,]{5,15})\b", tbl_txt)
         if m_after_id:
             amt = clean_amount(m_after_id.group(1))
             if amt.isdigit() and int(amt) >= 100000:
@@ -159,7 +161,7 @@ def parse_star_health_assure(pdf_text: str) -> dict:
             if amts:
                 data["sum_insured"] = str(max(amts))
 
-    # 7. Total Premium (Schedule Total Premium first — avoids half-yearly installment amount on 80D certificate)
+    # 7. Total Premium
     for pat in [
         r"(?i)Total\s*Premium\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         r"(?i)Total\s*Invoice\s*Value\s*\(in\s*Figures\)\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
