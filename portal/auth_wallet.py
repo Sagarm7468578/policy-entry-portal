@@ -1,5 +1,3 @@
-import hmac
-import hashlib
 import streamlit as st
 from portal.backend import call_backend
 
@@ -7,57 +5,6 @@ SUPPORT_EMAIL = "mahajansagar746@gmail.com"
 ENTRY_RATE_RS = 0.50
 WALLET_MIN_RS = 10
 WALLET_MAX_RS = 500
-_PERSIST_QP_KEY = "pm_sess"
-
-
-def _get_session_secret() -> str:
-    try:
-        if "auth" in st.secrets and st.secrets["auth"].get("cookie_secret"):
-            return str(st.secrets["auth"]["cookie_secret"])
-    except Exception:
-        pass
-    return f"policymitra_persist::{SUPPORT_EMAIL}"
-
-
-def _sign_session_token(auth_method: str, user_id: str, user_email: str) -> str:
-    raw = f"{auth_method.strip()}|{user_id.strip()}|{user_email.strip().lower()}"
-    sig = hmac.new(
-        _get_session_secret().encode("utf-8"),
-        raw.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()[:20]
-    return f"{auth_method.strip()}:{user_id.strip()}:{sig}"
-
-
-def _verify_session_token(token: str):
-    parts = str(token or "").split(":")
-    if len(parts) != 3:
-        return None
-    auth_method, user_id, sig = parts[0].strip(), parts[1].strip(), parts[2].strip()
-    if not auth_method or not user_id or not sig:
-        return None
-    expected = hmac.new(
-        _get_session_secret().encode("utf-8"),
-        f"{auth_method}|{user_id}|{user_id.lower()}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()[:20]
-    if not hmac.compare_digest(sig, expected):
-        return None
-    return auth_method, user_id
-
-
-def _persist_session_to_url(auth_method: str, user_id: str, user_email: str):
-    try:
-        st.query_params[_PERSIST_QP_KEY] = _sign_session_token(auth_method, user_id, user_email)
-    except Exception:
-        pass
-
-
-def clear_persisted_session():
-    try:
-        st.query_params.pop(_PERSIST_QP_KEY, None)
-    except Exception:
-        pass
 
 
 def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fallback_email: str = "", fallback_name: str = ""):
@@ -101,57 +48,6 @@ def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fal
     st.session_state.pop("resolved_bug_notifs", None)
     st.session_state.pop("email_otp_sent_to", None)
     st.session_state.pop("email_otp_name", None)
-    _persist_session_to_url(auth_method, uid, uemail)
-
-
-def restore_email_otp_session_if_present() -> bool:
-    """Restores Email OTP login across browser F5 refresh using signed URL query param + backend plan check."""
-    if st.session_state.get("logged_in", False):
-        if st.session_state.get("auth_method") == "email_otp" and st.session_state.get("user_id"):
-            _persist_session_to_url("email_otp", st.session_state["user_id"], st.session_state.get("user_email", ""))
-        return True
-
-    try:
-        raw_tok = st.query_params.get(_PERSIST_QP_KEY, "")
-        if isinstance(raw_tok, list):
-            raw_tok = raw_tok[0] if raw_tok else ""
-    except Exception:
-        raw_tok = ""
-
-    parsed = _verify_session_token(str(raw_tok or ""))
-    if not parsed:
-        return False
-
-    auth_method, uid = parsed
-    if auth_method != "email_otp":
-        return False
-
-    res = call_backend({
-        "action": "get_wallet_status",
-        "user_id": uid,
-        "user_email": uid if "@" in uid else "",
-        "user_mobile": "",
-    })
-    if not res.get("success"):
-        clear_persisted_session()
-        return False
-
-    apply_login_session(
-        "email_otp",
-        {
-            "user_id": uid,
-            "user_email": uid if "@" in uid else "",
-            "user_name": uid.split("@")[0] if "@" in uid else uid,
-            "plan_type": res.get("plan_type", ""),
-            "expiry": res.get("expiry", ""),
-            "wallet_balance": res.get("wallet_balance", 0.0),
-            "billable": res.get("billable", False),
-            "trial_expired": res.get("trial_expired", False),
-        },
-        fallback_uid=uid,
-        fallback_email=uid if "@" in uid else "",
-    )
-    return True
 
 
 def refresh_wallet_status() -> dict:
@@ -307,7 +203,6 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
                 st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
                 if st.button("🔄 Sign in with Another Google Account", type="primary", use_container_width=True):
                     st.session_state.google_auth_error = ""
-                    clear_persisted_session()
                     st.logout()
             elif google_configured:
                 st.info("✨ **New User?** Just click below — your account starts instantly with a **7 Days Free Trial** & setup guide on Email!")
