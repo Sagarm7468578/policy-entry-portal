@@ -16,14 +16,20 @@ from portal.backend import (
     fetch_linked_accounts_master,
     save_rows_to_drive_target,
 )
+from portal.auth_wallet import (
+    apply_login_session,
+    render_portal_login_screen,
+    charge_wallet_for_batch,
+)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_HEALTH_EXCEL_NAME = "POLICY ENTRY SHEET FOR HEALTH.xlsx"
 MAX_PDF_ROUNDS = 1
 
 DEFAULTS = {
-    "logged_in": False, "auth_method": "", "user_id": "", "user_email": "", "user_name": "",
-    "expiry": "", "google_auth_error": "", "pdf_uploader_key": 0, "col_editor_key": 0,
+    "logged_in": False, "auth_method": "", "user_id": "", "user_email": "", "user_mobile": "", "user_name": "",
+    "plan_type": "", "expiry": "", "wallet_balance": 0.0, "billable": False, "trial_expired": False,
+    "google_auth_error": "", "pdf_uploader_key": 0, "col_editor_key": 0,
     "saved_health_rows": None, "batch_history": [], "round_counter": 0, "settings_loaded": False,
     "fixed_sheet_url": "", "fixed_sheet_tab": "Policy Entries", "fixed_sheet_name": "",
     "mode3_excel_url": "", "mode3_excel_tab": "", "mode3_excel_name": "",
@@ -75,66 +81,17 @@ def handle_auto_google_login():
     google_logged_in, g_email, g_name = get_google_user_info()
     if google_logged_in and g_email and not st.session_state.logged_in:
         with st.spinner("Verifying Google account..."):
-            g_res = call_backend({"action": "google_login", "email": g_email})
+            g_res = call_backend({"action": "google_login", "email": g_email, "name": g_name})
         if g_res.get("success"):
-            st.session_state.update({
-                "logged_in": True, "auth_method": "google",
-                "user_id": g_res.get("user_id", g_email), "user_email": g_email, "user_name": g_name,
-                "expiry": g_res.get("expiry", ""), "google_auth_error": "",
-                "saved_health_rows": None, "settings_loaded": False,
-                "linked_master_df": None, "linked_master_error": "",
-                "health_accounts_df": None, "motor_accounts_df": None, "sme_accounts_df": None,
-                "drive_scan_info": None, "drive_last_scan_key": "", "batch_history": [], "round_counter": 0,
-                "quick_pdf_bytes_cache": {},
-            })
+            apply_login_session("google", g_res, fallback_uid=g_email, fallback_email=g_email, fallback_name=g_name)
             st.rerun()
         else:
-            st.session_state.google_auth_error = g_res.get("message", "This Google account is not registered or active.")
+            st.session_state.google_auth_error = g_res.get("message", "Could not verify Google account.")
     return google_configured, google_logged_in, g_email
 
 
 def render_login_screen(google_configured, google_logged_in, g_email):
-    _, col2, _ = st.columns([1, 2, 1])
-    with col2:
-        st.title("🛡️ MS.Soft Policy Mitra")
-        st.caption("All-in-One Insurance Advisor Automation Suite")
-        if google_logged_in and st.session_state.google_auth_error:
-            st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
-            st.info("If your subscription is active, please contact the Administrator to register this Gmail address, or sign in with a different Google account.")
-            if st.button("🔄 Sign in with Another Google Account", type="primary", use_container_width=True):
-                st.session_state.google_auth_error = ""
-                st.logout()
-        elif google_configured:
-            st.write("Sign in once with Google to stay logged in until you manually sign out.")
-            if st.button("🔵 Continue with Google", type="primary", use_container_width=True):
-                st.login()
-        else:
-            st.warning("⚠️ Google Sign-In is not configured in Streamlit Secrets (`[auth]`). Use Password Sign-In below.")
-
-        st.divider()
-        with st.expander("🔑 Sign in with User ID & Password (Backup)", expanded=not google_configured):
-            with st.form("login_form"):
-                user_id = st.text_input("User ID")
-                password = st.text_input("Password", type="password")
-                if st.form_submit_button("Sign In", use_container_width=True):
-                    if not user_id or not password:
-                        st.warning("Please enter both User ID and Password.")
-                    else:
-                        with st.spinner("Verifying credentials..."):
-                            result = call_backend({"action": "login", "user_id": user_id, "password": password})
-                        if result.get("success"):
-                            st.session_state.update({
-                                "logged_in": True, "auth_method": "password",
-                                "user_id": user_id.strip(), "user_email": "", "user_name": "",
-                                "expiry": result.get("expiry", ""), "saved_health_rows": None,
-                                "settings_loaded": False, "linked_master_df": None, "linked_master_error": "",
-                                "health_accounts_df": None, "motor_accounts_df": None, "sme_accounts_df": None,
-                                "drive_scan_info": None, "drive_last_scan_key": "", "batch_history": [], "round_counter": 0,
-                                "quick_pdf_bytes_cache": {},
-                            })
-                            st.rerun()
-                        else:
-                            st.error(result.get("message", "Invalid credentials."))
+    render_portal_login_screen(google_configured, google_logged_in, g_email)
 
 
 def ensure_settings_loaded():
@@ -248,6 +205,17 @@ def save_and_record_batch(
         elif move_msg and not save_error:
             save_msg = move_msg
 
+    now_ist = datetime.now(IST)
+    st.session_state.round_counter += 1
+    batch_ts = now_ist.strftime("%Y%m%d_%H%M%S")
+    batch_uid = f"{st.session_state.round_counter}_{batch_ts}"
+
+    # Charge ₹0.50 ONLY per successfully extracted, non-duplicate entry for Paid Wallet users
+    billable_entries = max(0, len(done_files) - skipped_count)
+    wallet_note = charge_wallet_for_batch(billable_entries, batch_uid) if not save_error else ""
+    if wallet_note:
+        save_msg = f"{save_msg}  \n{wallet_note}" if save_msg else wallet_note
+
     all_zip_buf = io.BytesIO()
     with zipfile.ZipFile(all_zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname, fbytes in done_files:
@@ -265,12 +233,10 @@ def save_and_record_batch(
                 zf.writestr(fname, fbytes)
         err_zip_bytes = err_zip_buf.getvalue()
 
-    now_ist = datetime.now(IST)
-    st.session_state.round_counter += 1
     batch_record = {
         "round_no": st.session_state.round_counter,
         "mode_used": mode_tag,
-        "timestamp": now_ist.strftime("%Y%m%d_%H%M%S"),
+        "timestamp": batch_ts,
         "time_display": now_ist.strftime("%d-%m-%Y %I:%M:%S %p"),
         "total_count": len(done_files) + len(error_files),
         "done_count": len(done_files),
