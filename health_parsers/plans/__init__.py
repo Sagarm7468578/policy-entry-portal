@@ -46,6 +46,7 @@ _PLAN_SPECS = [
     ("ADITYA BIRLA", "aditya_birla_activ_one", "is_aditya_birla_activ_one", "parse_aditya_birla_activ_one"),
     ("ADITYA BIRLA", "aditya_birla_activ_health", "is_aditya_birla_activ_health", "parse_aditya_birla_activ_health"),
     ("ADITYA BIRLA", "aditya_birla_activ_yuva", "is_aditya_birla_activ_yuva", "parse_aditya_birla_activ_yuva"),
+    ("CARE HEALTH", "care_explore", "is_care_explore", "parse_care_explore"),
     ("CARE HEALTH", "care_classic", "is_care_classic", "parse_care_classic"),
     ("CARE HEALTH", "care_supreme", "is_care_supreme", "parse_care_supreme"),
     ("IFFCO TOKIO", "iffco_tokio_fhp", "is_iffco_tokio_fhp", "parse_iffco_tokio_fhp"),
