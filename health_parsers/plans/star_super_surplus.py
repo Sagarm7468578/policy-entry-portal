@@ -11,13 +11,12 @@ from health_parsers.common import (
 
 def is_star_super_surplus(pdf_text: str) -> bool:
     return bool(
-        re.search(r"(?i)(?:Star\s+)?Super\s+Surplus(?:\s*\(Floater\))?\s+Insurance\s+Policy", pdf_text)
-        or re.search(r"(?i)Super\s+Surplus\s+Individual", pdf_text)
-        or re.search(r"(?i)SHAHLIP22034V|SHAHLIP22035V", pdf_text)
+        re.search(r"(?i)Super\s+Surplus", pdf_text)
+        or re.search(r"(?i)SHAHLIP22032V|SHAHLIP21\d+V", pdf_text)
     )
 
 
-def _extract_ss_agency(pdf_text: str) -> str:
+def _extract_star_agency(pdf_text: str) -> str:
     m_block = re.search(
         r"(?i)Intermediary[\r\n\s]*Code([\s\S]{0,1400}?)(?:Total\s*Premium|Period\s*of\s*Insurance)",
         pdf_text,
@@ -78,16 +77,19 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
     data["plan_name"] = "STAR SUPER SURPLUS"
     data["sub_type"] = "TOP UP"
 
+    # 1. Policy Number
     for pat in [
         r"(?i)Renewal\s*Endorsement\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
         r"(?i)Policy\s*No\.?\s*[\r\n\s]*[:\-]\s*[\r\n\s]*([A-Z0-9/\-]{8,30})",
         r"(?i)Attached\s+to\s+and\s+forming\s+part\s+of\s+Policy\s*No\.?\s*[:\-]?\s*([A-Z0-9/\-]{8,30})",
+        r"(?i)Health\s+Insurance\s+Policy\s*[\-\:]\s*([A-Z0-9/\-]{8,30})",
     ]:
         m = re.search(pat, pdf_text)
-        if m:
+        if m and re.search(r"\d{6,}", m.group(1)):
             data["policy_number"] = m.group(1).strip()
             break
 
+    # 2. Client Name (clean_person_name also converts "SURAJ.SONI" -> "SURAJ SONI")
     for pat in [
         r"(?i)Customer\s*Name[ \t]*[:\-][ \t]*([^\r\n]{3,80})",
         r"(?i)Proposer\s*Name[ \t]*[\r\n]*[ \t]*[:\-][ \t]*[\r\n]*[ \t]*([^\r\n]{3,80})",
@@ -100,19 +102,22 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
                 data["client_name"] = cand
                 break
 
+    # 3. Previous Policy Number
     for pat in [
-        r"(?i)Previous\s*Policy\s*No\.?[ \t]*[\r\n]*[ \t]*[:\-][ \t]*([^\r\n]{6,35})",
         r"(?i)towards\s+renewal\s+premium\s+of\s+policy[\r\n\s]+number\s*[:\-]?\s*[\r\n\s]*([A-Z0-9/\-]{8,35})",
+        r"(?i)Previous\s*Policy\s*No\.?[ \t]*[\r\n]*[ \t]*[:\-][ \t]*([^\r\n]{6,35})",
     ]:
         m_pyp = re.search(pat, pdf_text)
         if m_pyp:
             cand_pyp = m_pyp.group(1).strip().rstrip(",.")
-            if re.search(r"\d{5,}", cand_pyp) and not re.search(r"(?i)\b(?:Customer|Proposer|Code)\b", cand_pyp):
+            if re.search(r"\d{5,}", cand_pyp) and cand_pyp != data["policy_number"]:
                 data["pyp_number"] = cand_pyp
                 break
 
-    data["agency"] = _extract_ss_agency(pdf_text)
+    # 4. Agency
+    data["agency"] = _extract_star_agency(pdf_text)
 
+    # 5. Inception & Expiry Dates
     date_tok = r"(\d{2}[/\-][A-Za-z0-9]{2,3}[/\-]\d{2,4})"
     m_per = re.search(
         rf"(?i)Period\s*of\s*Insurance[\s\S]{{0,120}}?From\s*[:\-]?\s*{date_tok}[\s\S]{{0,80}}?To[\s\S]{{0,40}}?(?:Midnight\s*of\s*)?{date_tok}",
@@ -126,11 +131,8 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
         if m_cert:
             data["start_dt"] = data["start_dt"] or parse_any_date(m_cert.group(1))
             data["end_dt"] = data["end_dt"] or parse_any_date(m_cert.group(2))
-    if not data["end_dt"]:
-        m_vt = re.search(rf"(?i)Valid\s*Till\s*[:\-]\s*{date_tok}", pdf_text)
-        if m_vt:
-            data["end_dt"] = parse_any_date(m_vt.group(1))
 
+    # 6. Sum Insured
     m_si = re.search(
         r"(?i)(?:Basic\s*(?:Floater\s*)?)?Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
         pdf_text,
@@ -140,25 +142,19 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
         if amt.isdigit() and int(amt) >= 100000:
             data["sum_insured"] = amt
 
-    m_tbl = re.search(
-        r"(?i)(?:Details\s+of\s+Insured\s+Persons|Insured\s+Person\s+Details)\s*:?([\s\S]{0,1600}?)(?:Pre\s+Existing|Nominee\s+Details|Entered\s+by|$)",
-        pdf_text,
-    )
-    if not data["sum_insured"] and m_tbl:
-        amts = [clean_amount(a) for a in re.findall(r"\b\d{1,2}(?:,\d{2})*,\d{3}\b", m_tbl.group(1))]
-        amts = [int(a) for a in amts if a.isdigit() and int(a) >= 100000]
-        if amts:
-            data["sum_insured"] = str(max(amts))
-
+    # 7. Total Premium
     for pat in [
         r"(?i)Total\s*Premium\s*[\r\n\s]*[:\-]?\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         r"(?i)Total\s*Invoice\s*Value\s*\(in\s*Figures\)\s*[\r\n\s]*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
     ]:
         m_p = re.search(pat, pdf_text)
         if m_p:
-            data["premium"] = clean_amount(m_p.group(1))
-            break
+            amt = clean_amount(m_p.group(1))
+            if amt.isdigit() and int(amt) > 0:
+                data["premium"] = amt
+                break
 
+    # 8. Premium Mode
     m_rec = re.search(r"(?i)Payment\s+received\s+by\s+([^\r\n]{2,60})", pdf_text)
     if m_rec:
         seg = m_rec.group(1)
@@ -169,24 +165,22 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
         elif re.search(r"(?i)\bCash\b", seg):
             data["premium_mode"] = "CASH"
 
+    # 9. DOB (Oldest Insured Person — excludes first-policy inception date)
     first_inc_dt = None
     m_finc = re.search(rf"(?i)Date\s*of\s*Inception[\r\n\s]*of\s*first\s*policy[\r\n\s]*{date_tok}", pdf_text)
     if m_finc:
         first_inc_dt = parse_any_date(m_finc.group(1))
 
     dobs = []
+    m_tbl = re.search(
+        r"(?i)(?:Details\s+of\s+Insured\s+Persons|Insured\s+Person\s+Details)\s*:?([\s\S]{0,2000}?)(?:Nominee\s+Details|Entered\s+by|$)",
+        pdf_text,
+    )
     if m_tbl:
         for m_d in re.finditer(r"\b(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})\b", m_tbl.group(1)):
             dt = parse_any_date(m_d.group(1))
             if dt and dt.year >= 1920 and dt != first_inc_dt:
                 dobs.append(dt)
-    if not dobs:
-        m_card = re.search(r"(?i)Customer\s+Identity\s+Card([\s\S]{0,1200})", pdf_text)
-        if m_card:
-            for m_d in re.finditer(r"(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})\s*[\r\n\s]+(?:Male|Female|Other)", m_card.group(1), re.I):
-                dt = parse_any_date(m_d.group(1))
-                if dt and dt.year >= 1920:
-                    dobs.append(dt)
     if dobs:
         data["dob"] = fmt_date(min(dobs))
 
