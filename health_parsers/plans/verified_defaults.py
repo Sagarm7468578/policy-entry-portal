@@ -29,6 +29,7 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("STAR HEALTH", "MEDI CLASSIC (INDIVIDUAL)"),
     ("STAR HEALTH", "STAR CARDIAC CARE"),
     ("STAR HEALTH", "STAR HEALTH GAIN"),
+    ("STAR HEALTH", "FILL MANUAL"),
     ("IFFCO TOKIO", "FHP"),
     ("ADITYA BIRLA", "ACTIV HEALTH"),
     ("ADITYA BIRLA", "ACTIV YUVA"),
@@ -111,7 +112,6 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
     if re.search(r"(?i)(?:Ported\s*Policy|Portable\s*Case|Portability(?:/Migration)?)\s*[:\-]?\s*[\r\n\s]*No\b", pdf_text):
         return ""
 
-    # Pattern 1: Niva Bupa portability letter
     m_nb = re.search(
         r"(?i)intimate\s+you\s+that\s+your\s+policy[\s\S]{0,60}?\bof\s+([A-Za-z][A-Za-z .&\-]{3,90}?)\s+and\s+Date\s+of\s+Initiation",
         pdf_text,
@@ -121,7 +121,6 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
         if prev and prev != comp:
             return prev
 
-    # Pattern 2: Care Health "Portability Details of the Insured -> Previous Insurer :"
     m_care = re.search(
         r"(?i)Portability\s+Details\s+of\s+the\s+Insured[\s\S]{0,80}?Previous\s+Insurer\s*[:\-]\s*[\r\n\s]*([^\r\n]{3,90})",
         pdf_text,
@@ -139,7 +138,6 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
     if not is_port_case:
         return ""
 
-    # Pattern 3: Previous Insurance / Portability section mentioning a different insurer
     for m_sec in re.finditer(
         r"(?i)(?:Previous\s+Insurance\s+Details|Previous\s+Insurer\s+Details|Previous\s+Insurer[\s\S]{0,80}?Previous\s+Policy|Portability\s+Continuity\s+Benefits)([\s\S]{0,2200})",
         pdf_text,
@@ -239,11 +237,9 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
     plan = str(data.get("plan_name") or "").strip().upper()
     pol_no = str(data.get("policy_number") or "").strip()
 
-    # 0. Clean trailing agent/broker code suffix from Agency so Accounts lookup matches cleanly
     if data.get("agency"):
         data["agency"] = _clean_agency_suffix(data["agency"])
 
-    # 1. PYP Number rules
     if not str(data.get("pyp_number") or "").strip():
         derived = ""
         if comp == "HDFC ERGO":
@@ -258,12 +254,10 @@ def apply_verified_defaults(company: str, data: dict, pdf_text: str) -> dict:
         elif (comp, plan) in VERIFIED_SAME_POLICY_ON_RENEWAL and _is_explicit_renewal(pdf_text) and pol_no:
             data["pyp_number"] = pol_no
 
-    # 2. Premium Mode: mark "FILL MANUAL" only for verified plans when absent in PDF
     if not str(data.get("premium_mode") or "").strip():
         if (comp, plan) in VERIFIED_FILL_MANUAL_PREMIUM_MODE:
             data["premium_mode"] = "FILL MANUAL"
 
-    # 3. Portability Company & Portability Year (Ported -> Current Company + Year | Fresh -> "NEW" | Renewal -> "NO")
     if not str(data.get("portability_company") or "").strip():
         prev_ins = _detect_previous_insurer_on_port(comp, pdf_text)
         pyp_val = str(data.get("pyp_number") or "").strip().upper()
