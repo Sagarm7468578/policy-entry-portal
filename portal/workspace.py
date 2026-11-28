@@ -19,7 +19,7 @@ _FROZEN_HEADER_CSS = """
 <style>
 [data-testid="stMainBlockContainer"],
 .block-container {
-    padding-top: 3.7rem !important;
+    padding-top: 3.55rem !important;
 }
 header[data-testid="stHeader"] {
     background: var(--background-color, #ffffff) !important;
@@ -29,13 +29,15 @@ header[data-testid="stHeader"] {
     position: sticky !important;
     top: 3.55rem !important;
     z-index: 990 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
     background: transparent !important;
 }
 .pm-sticky-header {
     position: relative;
     background: var(--background-color, #ffffff);
     padding: 8px 14px 10px 14px;
-    margin-bottom: 6px;
+    margin: 0 0 6px 0;
     border-bottom: 1px solid #e2e8f0;
     box-shadow: 0 3px 8px -4px rgba(15, 23, 42, 0.14);
 }
@@ -160,13 +162,14 @@ def _build_status_bar_html(ctx, active_headers, is_custom_cols) -> str:
 
 
 def _render_frozen_header(ctx, active_headers, is_custom_cols, show_status_bar=True):
-    st.markdown(_FROZEN_HEADER_CSS, unsafe_allow_html=True)
     status_html = (
         f"<div class='pm-status-bar'>{_build_status_bar_html(ctx, active_headers, is_custom_cols)}</div>"
         if show_status_bar
         else ""
     )
+    # Single markdown block (CSS + HTML together) removes extra 1rem flex gap so header NEVER jumps on scroll
     st.markdown(
+        f"{_FROZEN_HEADER_CSS}"
         "<div class='pm-sticky-header'>"
         "  <div class='pm-title'><span class='pm-title-icon'>🛡️</span><span class='pm-title-text'>MS.Soft Policy Mitra</span></div>"
         "  <div class='pm-subtitle'>All-in-One Insurance Advisor Automation Suite</div>"
@@ -237,7 +240,6 @@ def _render_latest_batch(ctx, active_headers):
         st.warning("The following PDFs were skipped or had extraction issues (excluded from Excel & Preview Mode):")
         st.dataframe(pd.DataFrame(res["error_details"]), use_container_width=True, hide_index=True)
 
-    # Preview Mode runs across ALL modes (Mode 1, Mode 2, Mode 3 + Admin Bugging Mode)
     if bool(res.get("batch_rows")):
         is_bug_ui = bool(is_admin_user() and (is_bugging or res.get("is_bugging_batch")))
         batch_uid = f"{res['round_no']}_{res['timestamp']}"
@@ -245,7 +247,6 @@ def _render_latest_batch(ctx, active_headers):
         if is_bug_ui:
             st.subheader("🐞 Bugging Preview Mode")
             cached_cnt = len(res.get("retest_pdfs") or [])
-            # Hidden bridge controls triggered by the "🔄 Re-Test Preview" button inside the toolbar
             st.markdown("<div class='pm-hidden-retest-marker'></div>", unsafe_allow_html=True)
             raw_row_spec = st.text_input(
                 "🎯 Re-Test Rows",
