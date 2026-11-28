@@ -37,6 +37,7 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NATIONAL", "PERSONAL ACCIDENT"),
     ("NEW INDIA", "YUVA BHARAT"),
     ("TATA AIG", "TRAVEL"),
+    ("CARE HEALTH", "EXPLORE"),
     ("ICICI LOMBARD", "GROUP HEALTH"),
     ("UNITED INDIA", "FAMILY MEDICARE"),
 }
@@ -190,7 +191,7 @@ def _is_explicit_fresh_policy(company: str, pdf_text: str) -> bool:
             if not re.search(r"(?i)Portability(?:/Migration)?\s*[\r\n\s]*[:\-]?\s*Yes\b", pdf_text):
                 return True
     if company == "CARE HEALTH":
-        if re.search(r"(?i)Proposal\s+Form\s*[\-\s]*['\"]?CARE\b|In\s+reference\s+to\s+your\s+online\s+proposal", pdf_text):
+        if re.search(r"(?i)Proposal\s+Form\s*[\-\s]*['\"]?CARE\b|In\s+reference\s+to\s+your\s+online\s+proposal|Policy\s+Certificate\s*[\-\u2013]\s*EXPLORE", pdf_text):
             if not re.search(r"(?i)Portability\s+Details\s+of\s+the\s+Insured|Previous\s+Insurer\s*:", pdf_text):
                 return True
     if company == "ORIENTAL":
