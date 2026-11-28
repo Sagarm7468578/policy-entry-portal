@@ -114,6 +114,12 @@ def process_health_text(file_name: str, pdf_text: str, master_df=None, accounts_
         debug_info["client_name"] = extracted["client_name"] or file_name
         master_info = lookup_client_master(extracted["client_name"], master_df)
 
+        # If Client Master is linked & Client Name exists, mark unmatched Client Code clearly
+        has_linked_master = master_df is not None and hasattr(master_df, "empty") and not master_df.empty
+        client_code_val = str(master_info.get("client_code") or "").strip()
+        if not client_code_val and has_linked_master and str(extracted.get("client_name") or "").strip():
+            client_code_val = "PLS CHECK CLIENT MASTER"
+
         end_dt = extracted.get("end_dt")
         reminder_date = fmt_date(end_dt - timedelta(days=15)) if end_dt else ""
         policy_status = ""
@@ -130,7 +136,7 @@ def process_health_text(file_name: str, pdf_text: str, master_df=None, accounts_
 
         base_row.update({
             "Client Name": extracted["client_name"],
-            "Client Code": master_info["client_code"],
+            "Client Code": client_code_val,
             "Occupation": master_info["occupation"],
             "Mobile": master_info["mobile"],
             "Mail Id": master_info["mail_id"],
