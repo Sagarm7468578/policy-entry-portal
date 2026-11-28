@@ -37,6 +37,7 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NEW INDIA", "YUVA BHARAT"),
     ("TATA AIG", "TRAVEL"),
     ("ICICI LOMBARD", "GROUP HEALTH"),
+    ("UNITED INDIA", "FAMILY MEDICARE"),
 }
 
 # Verified plans where renewal continues with the SAME policy number if no separate PYP is printed
