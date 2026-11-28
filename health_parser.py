@@ -55,8 +55,11 @@ def _load_fresh_parsers():
     return hp_pkg.COMPANY_PARSERS, plans_pkg.dispatch_plan_parser, apply_defaults_fn
 
 
-def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, accounts_df=None):
-    """Returns (row_dict, is_success, error_reason, debug_info)"""
+def process_health_text(file_name: str, pdf_text: str, master_df=None, accounts_df=None):
+    """
+    Parses already-extracted PDF text directly (used by both live PDF entry and Bug Pack .txt replay).
+    Returns (row_dict, is_success, error_reason, debug_info).
+    """
     today_ist = datetime.now(IST).replace(tzinfo=None)
     entry_date = fmt_date(today_ist)
 
@@ -64,33 +67,31 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
     base_row["Insurance Type"] = "HEALTH INSURANCE"
     base_row["Date of Entry"] = entry_date
 
+    raw_text = str(pdf_text or "")
     debug_info = {
         "file_name": file_name,
         "client_name": "",
         "detected_company": "",
         "company_scores": {},
-        "raw_text": "",
+        "raw_text": raw_text,
         "error_reason": "",
     }
 
     try:
         company_parsers, dispatch_plan_parser, apply_defaults_fn = _load_fresh_parsers()
 
-        pdf_text = extract_pdf_text(pdf_bytes)
-        debug_info["raw_text"] = pdf_text
-
-        if len(pdf_text.strip()) < 80:
+        if len(raw_text.strip()) < 80:
             base_row["Client Name"] = file_name
             debug_info["client_name"] = file_name
             debug_info["error_reason"] = "Scanned / Image PDF (text readable nahi hai)"
             return base_row, False, debug_info["error_reason"], debug_info
 
-        scores = get_company_scores(pdf_text)
+        scores = get_company_scores(raw_text)
         company = next(iter(scores.keys()), "")
         debug_info["company_scores"] = scores
         debug_info["detected_company"] = company
 
-        extracted = dispatch_plan_parser(company, pdf_text) if company else None
+        extracted = dispatch_plan_parser(company, raw_text) if company else None
         if extracted is None:
             parser_fn = company_parsers.get(company)
             if not company or not parser_fn:
@@ -99,9 +100,9 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
                 debug_info["client_name"] = file_name
                 debug_info["error_reason"] = f"Company parser abhi add nahi hua: {company or 'Unknown'}"
                 return base_row, False, debug_info["error_reason"], debug_info
-            extracted = parser_fn(pdf_text)
+            extracted = parser_fn(raw_text)
             if callable(apply_defaults_fn):
-                extracted = apply_defaults_fn(company, extracted, pdf_text)
+                extracted = apply_defaults_fn(company, extracted, raw_text)
 
         if not extracted.get("client_name") and not extracted.get("policy_number"):
             base_row["Client Name"] = file_name
@@ -119,12 +120,12 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
         if end_dt:
             policy_status = "INACTIVE" if end_dt.date() < today_ist.date() else "ACTIVE"
 
-        agency = extracted.get("agency") or extract_generic_agency(pdf_text)
-        premium_mode = extracted.get("premium_mode") or extract_premium_mode(pdf_text)
+        agency = extracted.get("agency") or extract_generic_agency(raw_text)
+        premium_mode = extracted.get("premium_mode") or extract_premium_mode(raw_text)
         if extracted.get("skip_dob_fallback"):
             dob = extracted.get("dob", "")
         else:
-            dob = extracted.get("dob") or extract_oldest_dob(pdf_text, extracted.get("start_dt"))
+            dob = extracted.get("dob") or extract_oldest_dob(raw_text, extracted.get("start_dt"))
         accounts_val = lookup_accounts_master(company, agency, accounts_df)
 
         base_row.update({
@@ -167,3 +168,26 @@ def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, account
         debug_info["client_name"] = file_name
         debug_info["error_reason"] = str(e)
         return base_row, False, str(e), debug_info
+
+
+def process_health_pdf(file_name: str, pdf_bytes: bytes, master_df=None, accounts_df=None):
+    """Returns (row_dict, is_success, error_reason, debug_info)"""
+    try:
+        pdf_text = extract_pdf_text(pdf_bytes)
+    except Exception as e:
+        today_ist = datetime.now(IST).replace(tzinfo=None)
+        base_row = {col: "" for col in ALL_SYSTEM_FIELDS}
+        base_row["Insurance Type"] = "HEALTH INSURANCE"
+        base_row["Date of Entry"] = fmt_date(today_ist)
+        base_row["Client Name"] = file_name
+        debug_info = {
+            "file_name": file_name,
+            "client_name": file_name,
+            "detected_company": "",
+            "company_scores": {},
+            "raw_text": "",
+            "error_reason": str(e),
+        }
+        return base_row, False, str(e), debug_info
+
+    return process_health_text(file_name, pdf_text, master_df=master_df, accounts_df=accounts_df)
