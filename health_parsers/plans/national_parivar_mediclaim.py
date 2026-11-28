@@ -5,76 +5,41 @@ from health_parsers.common import (
     fmt_date,
     clean_amount,
     clean_person_name,
+    shorten_agency_name,
     extract_premium_mode,
 )
 
 
 def is_national_parivar_mediclaim(pdf_text: str) -> bool:
     return bool(
-        re.search(r"(?i)(?:New\s+)?National\s+Parivar\s*Mediclaim", pdf_text)
-        or re.search(r"(?i)NICHLIP25037V", pdf_text)
+        re.search(r"(?i)(?:New\s+)?National\s+Parivar\s+Mediclaim", pdf_text)
+        or re.search(r"(?i)NICHLIP23033V|NICHLIP21\d+V|NICHLIP22\d+V", pdf_text)
     )
 
 
-def _extract_national_agency(pdf_text: str) -> str:
-    # National Insurance bilingual header: "Sales Channel Details ... नाम /Name: Mrs Sunanda Mangal ..."
-    m_sc = re.search(
-        r"(?i)Sales\s*Channel\s*Details([\s\S]{0,450}?)(?:UIN\s*No|Customer\s*Care|Printed\s*on|$)",
-        pdf_text,
+def _clean_nic_relation_name(raw_name: str) -> str:
+    """
+    Cleans National Insurance relation-embedded names:
+      - 'PHOOL GIRI SO MR KASHI GIRI' -> 'PHOOL GIRI'
+      - 'MR PHOOL GIRI S/O MR KASHI GIRI' -> 'PHOOL GIRI'
+      - 'AMIT S/O MR NARENDRA LAHOTI' -> 'AMIT LAHOTI'
+    """
+    s = re.sub(r"\s+", " ", str(raw_name or "")).strip()
+    m_rel = re.search(
+        r"(?i)^(.*?)\b(?:S/O|W/O|D/O|C/O|(?:SO|WO|DO|CO)(?=\s+(?:MR|MRS|MS|MISS|SMT|SHRI|DR|LATE)(?:\.|\b)))\b(.*)$",
+        s,
     )
-    if m_sc:
-        block = m_sc.group(1)
-        m_nm = re.search(r"(?i)(?:/\s*)?Name\s*[:\-]\s*([^\r\n]{3,80})", block)
-        if m_nm:
-            raw = m_nm.group(1)
-            raw = re.split(r"(?i)(?:Contact\s*Number|संपकर|संपर्क|Mobile|Phone|Email|E-mail|\d{6,})", raw)[0]
-            cand = clean_person_name(raw)
-            if cand and len(cand) >= 3:
-                return cand
-    return ""
-
-
-def _extract_national_pyp(pdf_text: str) -> str:
-    # National lists multiple previous policies with Dt.DD/MM/YYYY — pick the most recent one
-    m_sec = re.search(
-        r"(?i)Previous\s*Policy\s*Number\s*and\s+Expiry\s*Date([\s\S]{0,700}?)(?:Rupees|General\s*Summary|Government\s*Subsidy|Basic\s*Cover|$)",
-        pdf_text,
-    )
-    if not m_sec:
-        return ""
-    sec = m_sec.group(1)
-    pairs = re.findall(
-        r"([A-Z0-9/\-]{10,25})[^\d\r\n]{0,25}Dt\.?\s*(\d{2}[/\-]\d{2}[/\-]\d{2,4})",
-        sec,
-        flags=re.IGNORECASE,
-    )
-    best_dt = None
-    best_pno = ""
-    for pno, d_str in pairs:
-        dt = parse_any_date(d_str)
-        if dt and (best_dt is None or dt > best_dt):
-            best_dt = dt
-            best_pno = pno.strip()
-    if best_pno:
-        return best_pno
-
-    ids = re.findall(r"\b\d{14,22}\b", sec)
-    return ids[-1] if ids else ""
-
-
-def _extract_national_dob(pdf_text: str) -> str:
-    m_sec = re.search(
-        r"(?i)Individual\s+member\s+details([\s\S]{0,1800}?)(?:Cumulative\s*Bonus|Optional\s*Copayment|Nominee\s*Details|$)",
-        pdf_text,
-    )
-    sec = m_sec.group(1) if m_sec else ""
-    dobs = []
-    if sec:
-        for d_str in re.findall(r"\b\d{2}[/\-]\d{2}[/\-](?:19|20)\d{2}\b", sec):
-            dt = parse_any_date(d_str)
-            if dt and dt.year >= 1920:
-                dobs.append(dt)
-    return fmt_date(min(dobs)) if dobs else ""
+    if m_rel:
+        left = clean_person_name(m_rel.group(1))
+        right = clean_person_name(m_rel.group(2))
+        if left and len(left.split()) >= 2:
+            return left
+        if left and right:
+            r_parts = right.split()
+            if len(r_parts) >= 2 and r_parts[-1] not in left.split():
+                return f"{left} {r_parts[-1]}"
+            return left
+    return clean_person_name(s)
 
 
 def parse_national_parivar_mediclaim(pdf_text: str) -> dict:
@@ -83,74 +48,101 @@ def parse_national_parivar_mediclaim(pdf_text: str) -> dict:
     data["sub_type"] = "MEDICLAIM"
 
     # 1. Policy Number
-    m_pol = re.search(r"(?i)Policy\s*Number\s*[:\-]\s*[\r\n\s]*([A-Z0-9/\-]{10,30})", pdf_text)
-    if m_pol:
-        data["policy_number"] = m_pol.group(1).strip()
-
-    # 2. Client Name
     for pat in [
-        r"(?i)Customer\s*Name\s*[:\-]\s*([^\r\n]{3,80})",
-        r"(?i)Details\s*Of\s*Receiver\s*[:\-]\s*([^\r\n]{3,80})",
-        r"(?i)This\s+is\s+to\s+certify\s+that\s+([^\r\n]{3,70}?)\s+has\s+paid",
+        r"(?i)Policy\s*Number\s*[:\-]\s*[\r\n\s]*([0-9]{14,22})\b",
+        r"(?i)Policy\s*No\.?\s*[:\-]\s*[\r\n\s]*([0-9]{14,22})\b",
+    ]:
+        m_pol = re.search(pat, pdf_text)
+        if m_pol:
+            data["policy_number"] = m_pol.group(1).strip()
+            break
+
+    # 2. Client Name (cleans SO / S/O / W/O / D/O relation suffixes)
+    for pat in [
+        r"(?i)Customer\s*Name\s*[:\-]\s*([^\r\n]{3,90})",
+        r"(?i)Details\s*Of\s*Receiver\s*[:\-]\s*([^\r\n]{3,90})",
+        r"(?i)certify\s+that\s*\.?\s*([^\r\n]{3,90}?)\s+has\s+paid\b",
     ]:
         m_nm = re.search(pat, pdf_text)
         if m_nm:
-            cand = clean_person_name(m_nm.group(1))
+            cand = _clean_nic_relation_name(m_nm.group(1))
             if cand and len(cand) >= 3:
                 data["client_name"] = cand
                 break
 
-    # 3. Agency (Sales Channel Details -> Name)
-    data["agency"] = _extract_national_agency(pdf_text)
+    # 3. Agency (Sales Channel Details -> Name: Mrs Khushbu Bhandari)
+    m_sc = re.search(
+        r"(?i)Sales\s*Channel\s*Details[\s\S]{0,160}?Name\s*[:\-]\s*([^\r\n]{2,80})",
+        pdf_text,
+    )
+    if m_sc:
+        cand = shorten_agency_name(clean_person_name(m_sc.group(1)))
+        if cand:
+            data["agency"] = cand
 
-    # 4. Policy Period
-    date_tok = r"(\d{2}[/\-]\d{2}[/\-]\d{2,4})"
+    # 4. Inception & Expiry Dates
+    date_tok = r"(\d{2}[/\-][A-Za-z0-9]{2,3}[/\-]\d{2,4})"
     m_per = re.search(
-        rf"(?i)Policy\s*Effective\s*from\s*[:\-]?\s*(?:00:00\s*hours,?\s*)?(?:on\s*)?{date_tok}\s*to\s*[\r\n\s]*(?:midnight\s*of\s*)?{date_tok}",
+        rf"(?i)Policy\s*Effective\s*from[\s\S]{{0,35}}?{date_tok}[\s\S]{{0,30}}?to[\s\S]{{0,30}}?{date_tok}",
         pdf_text,
     )
     if not m_per:
-        m_per = re.search(rf"(?i)period\s+from\s+{date_tok}\s+to\s+{date_tok}", pdf_text)
+        m_per = re.search(rf"(?i)for\s+the\s+period\s+from\s+{date_tok}\s+to\s+{date_tok}", pdf_text)
     if m_per:
         data["start_dt"] = parse_any_date(m_per.group(1))
         data["end_dt"] = parse_any_date(m_per.group(2))
 
-    # 5. Premium (Total Amount / Total Premium)
+    # 5. Sum Insured (Basic Cover Sum Insured)
     for pat in [
-        r"(?i)Total\s*Amount\s*[\r\n\s]*(?:`|Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        r"(?i)Total\s*Premium\s*[\r\n\s]*(?:`|Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        r"(?i)Total\s*Value\s*\(In\s*figures\)\s*[:\-]?\s*(?:`|Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-    ]:
-        m_p = re.search(pat, pdf_text)
-        if m_p:
-            data["premium"] = clean_amount(m_p.group(1))
-            break
-
-    # 6. Sum Insured
-    for pat in [
-        r"(?i)Basic\s*Cover\s*Sum\s*Insured\s*[\r\n\s]*(?:`|Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        r"(?i)Floater\s*Sum\s*Insured\s*\(SI\)\s*[:\-]?\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
+        r"(?i)Basic\s*Cover\s*Sum\s*Insured\s*[\r\n\s]*[:\-]?\s*(?:Rs\.?|INR|₹|`)?\s*([\d,]{5,15}(?:\.\d{2})?)",
+        r"(?i)Sum\s*Insured\s*[\r\n]+\s*(?:Rs\.?|INR|₹|`)?\s*([\d,]{5,15}(?:\.\d{2})?)\b",
     ]:
         m_si = re.search(pat, pdf_text)
         if m_si:
-            data["sum_insured"] = clean_amount(m_si.group(1))
-            break
+            amt = clean_amount(m_si.group(1))
+            if amt.isdigit() and int(amt) >= 50000:
+                data["sum_insured"] = amt
+                break
 
-    # 7. PYP Number
-    data["pyp_number"] = _extract_national_pyp(pdf_text)
+    # 6. Total Premium (with GST)
+    for pat in [
+        r"(?i)Total\s*Amount\s*[\r\n\s]*[:\-]?\s*(?:Rs\.?|INR|₹|`)?\s*([\d,]+(?:\.\d{2})?)",
+        r"(?i)Total\s*Invoice\s*Value\s*\(In\s*figures\)\s*[:\-]\s*(?:Rs\.?|INR|₹|`)?\s*([\d,]+(?:\.\d{2})?)",
+        r"(?i)has\s+paid\s*(?:Rs\.?|INR|₹|`)\s*([\d,]+(?:\.\d{2})?)",
+    ]:
+        m_p = re.search(pat, pdf_text)
+        if m_p:
+            amt = clean_amount(m_p.group(1))
+            if amt.isdigit() and int(amt) > 0:
+                data["premium"] = amt
+                break
 
-    # 8. DOB
-    data["dob"] = _extract_national_dob(pdf_text)
+    # 7. Previous Policy Number (picks the one WITH an expiry date if multiple lines exist)
+    m_pyp_block = re.search(
+        r"(?i)Previous\s*Policy\s*Number\s*and[\r\n\s]*Expiry\s*Date([\s\S]{0,260})",
+        pdf_text,
+    )
+    if m_pyp_block:
+        blk = re.split(r"(?i)(?:Rupees|Government\s+Subsidy|General\s+Summary|Basic\s+Cover)", m_pyp_block.group(1))[0]
+        m_with_dt = re.search(r"([0-9]{14,24})[^\r\n]{0,25}?\d{2}/\d{2}/\d{4}", blk)
+        if m_with_dt:
+            data["pyp_number"] = m_with_dt.group(1).strip()
+        else:
+            all_nums = re.findall(r"([0-9]{14,24})", blk)
+            if all_nums:
+                data["pyp_number"] = all_nums[-1].strip()
 
-    # 9. Premium Mode (e.g. Instrument number EASI... -> ONLINE, 6-digit -> CHEQUE)
-    m_inst = re.search(r"(?i)by\s+Instrument\s+number\s*[\r\n\s]*([A-Z0-9/\-]{4,35})", pdf_text)
-    if m_inst:
-        inst = m_inst.group(1).strip().upper()
-        if re.fullmatch(r"\d{6}", inst):
-            data["premium_mode"] = "CHEQUE"
-        elif re.match(r"^(?:EASI|PG|IPG|EPG|UPI|NEFT|RTGS|IMPS|ONL|PAY|TXN|OPS)", inst) or len(inst) >= 10:
-            data["premium_mode"] = "ONLINE"
-    if not data["premium_mode"]:
-        data["premium_mode"] = extract_premium_mode(pdf_text)
+    # 8. DOB (Oldest Insured Person)
+    dobs = []
+    for m_d in re.finditer(r"(\d{2}/\d{2}/(?:19|20)\d{2})\s*[\r\n\s]+\d{1,3}\s*Yrs\b", pdf_text, re.I):
+        dt = parse_any_date(m_d.group(1))
+        if dt and dt.year >= 1920:
+            dobs.append(dt)
+    if dobs:
+        data["dob"] = fmt_date(min(dobs))
 
+    # 9. Premium Mode
+    data["premium_mode"] = extract_premium_mode(pdf_text)
+    if not data["premium_mode"] and re.search(r"(?i)by\s+Instrument\s+number\s+\d+", pdf_text):
+        data["premium_mode"] = "CHEQUE"
     return data
