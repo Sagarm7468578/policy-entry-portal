@@ -4,7 +4,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
-from portal.backend import apply_share_commission
+from portal.backend import call_backend, apply_share_commission
 from portal.state import get_active_master_df, get_active_accounts_df
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -26,28 +26,41 @@ _PREVIEW_CORE_COLS = [
 def parse_bug_pack_txt(pack_text: str, source_pack_name: str = "") -> dict:
     """
     Parses any Admin BUG_PACK_*.txt or User USER_BUG_PACK_*.txt file into structured entries
-    containing reported [BUG] fields and the exact RAW PDF TEXT for live parser replay.
+    containing reporter info, reported [BUG] fields, and exact RAW PDF TEXT for live parser replay.
     """
     text = str(pack_text or "").replace("\r\n", "\n")
     meta = {
         "source_file": source_pack_name,
         "batch_id": "",
         "reported_by": "",
+        "reporter_name": "",
+        "reporter_email": "",
+        "reporter_user_id": "",
         "user_note": "",
         "entries": [],
     }
 
+    m_uid = re.search(r"USER_BUG_PACK_([A-Za-z0-9_\-]+?)_\d+_ENTRIES_", str(source_pack_name or ""))
+    if m_uid:
+        meta["reporter_user_id"] = m_uid.group(1).strip()
+
     m_batch = re.search(r"Batch ID:\s*([^\|\n]+)", text)
     if m_batch:
         meta["batch_id"] = m_batch.group(1).strip()
+
     m_rep = re.search(r"Reported By:\s*([^\n]+)", text)
     if m_rep:
-        meta["reported_by"] = m_rep.group(1).strip()
+        rep_line = m_rep.group(1).strip()
+        meta["reported_by"] = rep_line
+        m_em = re.search(r"\(([^()\s]+@[^()\s]+)\)", rep_line)
+        if m_em:
+            meta["reporter_email"] = m_em.group(1).strip()
+        meta["reporter_name"] = rep_line.split("(")[0].split("|")[0].strip()
+
     m_note = re.search(r"User Note\s*:\s*([^\n]+)", text)
     if m_note:
         meta["user_note"] = m_note.group(1).strip()
 
-    # Split into individual BUG ENTRY #N OF M blocks
     entry_starts = [m.start() for m in re.finditer(r"BUG ENTRY #\d+\s+OF\s+\d+", text)]
     for i, start_pos in enumerate(entry_starts):
         end_pos = entry_starts[i + 1] if i + 1 < len(entry_starts) else len(text)
@@ -77,6 +90,10 @@ def parse_bug_pack_txt(pack_text: str, source_pack_name: str = "") -> dict:
         if pdf_file or raw_text:
             meta["entries"].append({
                 "source_pack": source_pack_name,
+                "batch_id": meta["batch_id"],
+                "reporter_email": meta["reporter_email"],
+                "reporter_name": meta["reporter_name"],
+                "reporter_user_id": meta["reporter_user_id"],
                 "reported_client": client_name,
                 "reported_company": company_name,
                 "reported_plan": plan_name,
@@ -183,11 +200,78 @@ def _run_bug_pack_replay(ctx, entries: list, use_my_masters: bool = False):
     }
 
 
+def _build_resolution_summary(scorecard: list) -> str:
+    lines = []
+    for r in scorecard:
+        if r["Status"].startswith("🟢") or r["Status"].startswith("🟡"):
+            lines.append(
+                f"• {r['Client (Live)']} ({r['Company']} | {r['Plan']}) — "
+                f"{r['Bug Column']}: {r['Before (Reported)']} → {r['After Fix (Live)']}"
+            )
+    return "\n".join(lines)
+
+
+def render_resolved_bug_banner():
+    """
+    Shows a dismissible in-portal banner to logged-in users when Admin resolves their reported bug(s).
+    Fetches once per session (zero slowdown during regular work).
+    """
+    uid = str(st.session_state.get("user_id") or "").strip()
+    uemail = str(st.session_state.get("user_email") or "").strip()
+    if not uid and not uemail:
+        return
+
+    if "resolved_bug_notifs" not in st.session_state:
+        res = call_backend({
+            "action": "get_bug_notifications",
+            "user_id": uid,
+            "user_email": uemail,
+        })
+        st.session_state["resolved_bug_notifs"] = res.get("notifications", []) if res.get("success") else []
+
+    notifs = st.session_state.get("resolved_bug_notifs") or []
+    if not notifs:
+        return
+
+    for idx, n in enumerate(notifs):
+        tid = str(n.get("ticket_id") or f"t_{idx}")
+        batch_id = str(n.get("batch_id") or "").strip()
+        resolved_at = str(n.get("resolved_at") or "").strip()
+        note_txt = str(n.get("resolution_note") or "").strip()
+        summary_txt = str(n.get("summary") or "").strip()
+
+        c_msg, c_btn = st.columns([4.4, 1.1])
+        with c_msg:
+            hdr = f"🎉 **Good News! Your Bug Report (Batch `{batch_id}`) has been RESOLVED**"
+            if resolved_at:
+                hdr += f" *(on {resolved_at})*"
+            body_lines = [hdr]
+            if note_txt:
+                body_lines.append(f"💬 **Admin Note:** {note_txt}")
+            if summary_txt:
+                short_sum = summary_txt if len(summary_txt) <= 280 else (summary_txt[:277] + "...")
+                body_lines.append(short_sum)
+            body_lines.append("Ab aap in PDFs ko dobara process kar sakte hain — fix live ho chuka hai!")
+            st.success("  \n".join(body_lines))
+        with c_btn:
+            if st.button("✅ Got It", use_container_width=True, key=f"dismiss_bug_notif_{tid}_{idx}"):
+                call_backend({
+                    "action": "dismiss_bug_notification",
+                    "ticket_id": tid,
+                    "user_id": uid,
+                    "user_email": uemail,
+                })
+                st.session_state["resolved_bug_notifs"] = [
+                    x for x in notifs if str(x.get("ticket_id") or "") != tid
+                ]
+                st.rerun()
+
+
 def render_bug_pack_tester(ctx):
-    """Renders the Admin '🧪 Test User Bug Pack (.txt)' replay tool inside Bugging Mode."""
+    """Renders Admin '🧪 Test User Bug Pack (.txt)' replay tool + 1-Click Resolved Email & Portal Notification."""
     st.info(
         "🧪 **Zero-PDF Bug Pack Verifier:** User ke Gmail par aayi **`USER_BUG_PACK_...txt`** (ya apni `BUG_PACK_...txt`) "
-        "upload karein — bina original PDF ke, latest GitHub parsers par live **Before vs After** check ho jayega!"
+        "upload karein — bina original PDF ke, latest GitHub parsers par live **Before vs After** check + 1-Click Resolved Mail!"
     )
 
     uploaded_packs = st.file_uploader(
@@ -203,12 +287,14 @@ def render_bug_pack_tester(ctx):
         return
 
     all_entries = []
+    parsed_packs = []
     pack_notes = []
     sig_parts = []
     for f in uploaded_packs:
         raw_bytes = f.getvalue()
         sig_parts.append(f"{f.name}:{len(raw_bytes)}")
         parsed = parse_bug_pack_txt(raw_bytes.decode("utf-8", errors="ignore"), source_pack_name=f.name)
+        parsed_packs.append(parsed)
         all_entries.extend(parsed["entries"])
         if parsed.get("reported_by") or parsed.get("user_note"):
             note_part = f" — Note: *{parsed['user_note']}*" if parsed.get("user_note") else ""
@@ -286,6 +372,47 @@ def render_bug_pack_tester(ctx):
             hide_index=True,
             height=min(120 + len(df_sc) * 36, 460),
         )
+
+    # 1-Click Notify User: Sends Resolved Email + triggers in-portal Resolved Notification Banner
+    primary_pack = next((p for p in parsed_packs if p.get("reporter_email")), parsed_packs[0])
+    with st.expander("📧 Notify User: Mark Bug Resolved (Email + Portal Banner)", expanded=(pending_cnt == 0 and fixed_cnt > 0)):
+        n1, n2 = st.columns([1.4, 2.2])
+        with n1:
+            notify_email = st.text_input(
+                "User Email",
+                value=primary_pack.get("reporter_email", ""),
+                placeholder="user@gmail.com",
+                key=f"notify_email_{curr_sig[:24]}",
+            )
+        with n2:
+            admin_note = st.text_input(
+                "Resolution Note for User",
+                value="Your reported policy format has been fixed and updated live. Please re-run those PDFs now.",
+                key=f"notify_note_{curr_sig[:24]}",
+            )
+        if st.button(
+            "📧 Send 'Bug Resolved' Email & Show Portal Notification",
+            type="primary",
+            use_container_width=True,
+            disabled=not bool(notify_email.strip()),
+            key=f"btn_send_resolved_{curr_sig[:24]}",
+        ):
+            with st.spinner("Sending resolved email & updating Bug_Tickets..."):
+                r_out = call_backend({
+                    "action": "resolve_bug_report",
+                    "user_id": primary_pack.get("reporter_user_id", ""),
+                    "user_name": primary_pack.get("reporter_name", "") or "Valued User",
+                    "user_email": notify_email.strip(),
+                    "batch_id": primary_pack.get("batch_id", ""),
+                    "fixed_count": fixed_cnt,
+                    "entry_count": res["entry_count"],
+                    "resolution_summary": _build_resolution_summary(scorecard),
+                    "resolution_note": admin_note.strip(),
+                })
+            if r_out.get("success"):
+                st.success(f"✅ Resolved email sent to `{notify_email.strip()}` & in-portal notification activated!")
+            else:
+                st.error(f"❌ Failed: {r_out.get('message', 'Check Apps Script deployment for resolve_bug_report action.')}")
 
     if res["full_rows"]:
         with st.expander(f"📋 Full Live Extracted Output ({len(res['full_rows'])} rows)", expanded=False):
