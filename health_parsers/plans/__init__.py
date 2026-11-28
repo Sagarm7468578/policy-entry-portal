@@ -29,6 +29,7 @@ _PLAN_SPECS = [
     ("STAR HEALTH", "star_renewal_endorsement", "is_star_renewal_endorsement", "parse_star_renewal_endorsement"),
     ("NIVA BUPA", "niva_bupa_reassure3", "is_niva_bupa_reassure3", "parse_niva_bupa_reassure3"),
     ("NIVA BUPA", "niva_bupa_reassure2", "is_niva_bupa_reassure2", "parse_niva_bupa_reassure2"),
+    ("NIVA BUPA", "niva_bupa_reassure", "is_niva_bupa_reassure", "parse_niva_bupa_reassure"),
     ("NIVA BUPA", "niva_bupa_health_recharge", "is_niva_bupa_health_recharge", "parse_niva_bupa_health_recharge"),
     ("NIVA BUPA", "niva_bupa_health_companion", "is_niva_bupa_health_companion", "parse_niva_bupa_health_companion"),
     ("NIVA BUPA", "niva_bupa_aspire", "is_niva_bupa_aspire", "parse_niva_bupa_aspire"),
