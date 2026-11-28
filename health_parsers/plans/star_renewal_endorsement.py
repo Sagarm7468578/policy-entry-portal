@@ -136,7 +136,7 @@ def parse_star_renewal_endorsement(pdf_text: str) -> dict:
             data["start_dt"] = data["start_dt"] or parse_any_date(m_cert.group(1))
             data["end_dt"] = data["end_dt"] or parse_any_date(m_cert.group(2))
 
-    # 6. Sum Insured
+    # 6. Sum Insured (Floater inline label OR Individual "Details of Insured Persons:" table)
     m_si = re.search(
         r"(?i)(?:Basic\s*(?:Floater\s*)?)?Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
         pdf_text,
@@ -145,6 +145,23 @@ def parse_star_renewal_endorsement(pdf_text: str) -> dict:
         amt = clean_amount(m_si.group(1))
         if amt.isdigit() and int(amt) >= 50000:
             data["sum_insured"] = amt
+
+    m_tbl = re.search(
+        r"(?i)(?:Details\s+of\s+Insured\s+Persons|Insured\s+Person\s+Details)\s*:?([\s\S]{0,2000}?)(?:Pre\s+Existing|Nominee\s+Details|Entered\s+by|$)",
+        pdf_text,
+    )
+    if not data["sum_insured"] and m_tbl:
+        tbl_txt = m_tbl.group(1)
+        m_after_id = re.search(r"\d+\-\d+\s*[\r\n]+\s*([\d,]{5,15})\b", tbl_txt)
+        if m_after_id:
+            amt = clean_amount(m_after_id.group(1))
+            if amt.isdigit() and int(amt) >= 50000:
+                data["sum_insured"] = amt
+        if not data["sum_insured"]:
+            amts = [clean_amount(a) for a in re.findall(r"\b\d{1,2}(?:,\d{2})*,\d{3}\b|\b\d{1,3}(?:,\d{3})+\b", tbl_txt)]
+            amts = [int(a) for a in amts if a.isdigit() and int(a) >= 50000]
+            if amts:
+                data["sum_insured"] = str(max(amts))
 
     # 7. Total Premium
     for pat in [
@@ -176,12 +193,12 @@ def parse_star_renewal_endorsement(pdf_text: str) -> dict:
         first_inc_dt = parse_any_date(m_finc.group(1))
 
     dobs = []
-    m_tbl = re.search(
+    m_tbl_full = re.search(
         r"(?i)(?:Details\s+of\s+Insured\s+Persons|Insured\s+Person\s+Details)\s*:?([\s\S]{0,2000}?)(?:Nominee\s+Details|Entered\s+by|$)",
         pdf_text,
     )
-    if m_tbl:
-        for m_d in re.finditer(r"\b(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})\b", m_tbl.group(1)):
+    if m_tbl_full:
+        for m_d in re.finditer(r"\b(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2})\b", m_tbl_full.group(1)):
             dt = parse_any_date(m_d.group(1))
             if dt and dt.year >= 1920 and dt != first_inc_dt:
                 dobs.append(dt)
