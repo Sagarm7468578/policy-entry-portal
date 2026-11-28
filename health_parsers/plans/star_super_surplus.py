@@ -12,7 +12,7 @@ from health_parsers.common import (
 def is_star_super_surplus(pdf_text: str) -> bool:
     return bool(
         re.search(r"(?i)Super\s+Surplus", pdf_text)
-        or re.search(r"(?i)SHAHLIP22032V|SHAHLIP22034V|SHAHLIP21\d+V", pdf_text)
+        or re.search(r"(?i)SHAHLIP22032V|SHAHLIP22034V|SHAHLIP22035V|SHAHLIP21\d+V", pdf_text)
     )
 
 
@@ -23,10 +23,10 @@ def _extract_star_agency(pdf_text: str) -> str:
         "premium", "base", "product", "phone", "no", "cgst", "sgst", "igst", "stamp",
         "duty", "total", "rs", "e-mail", "email", "mail", "id", "new", "fresh",
         "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
-        "customer", "number", "tel", "mobile", "address",
+        "customer", "number", "tel", "mobile", "address", "proposer",
     }
 
-    def _scan_block(block: str) -> str:
+    def _scan_block(block: str, require_colon: bool = True) -> str:
         if not block:
             return ""
         lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in block.splitlines()]
@@ -46,9 +46,10 @@ def _extract_star_agency(pdf_text: str) -> str:
                     break
             return extra
 
+        prefix = r"^:\s*" if require_colon else r"^:?\s*"
         for idx, ln in enumerate(lines):
             m_sal = re.match(
-                r"(?i)^:?\s*(?:MRS|MISS|MR|MS|DR|SMT|SHRI|M/S)(?:\.[ \t]*|[ \t]+)([A-Za-z][A-Za-z .&/\-]{1,60})$",
+                rf"(?i){prefix}(?:MRS|MISS|MR|MS|DR|SMT|SHRI|M/S)(?:\.[ \t]*|[ \t]+)([A-Za-z][A-Za-z .&/\-]{{1,60}})$",
                 ln,
             )
             if m_sal:
@@ -67,21 +68,28 @@ def _extract_star_agency(pdf_text: str) -> str:
                     return shorten_agency_name(clean_person_name(" ".join(parts)))
         return ""
 
-    # Standard Star layout: agency appears AFTER Intermediary Code
+    # 1. PREMIA layout: ": Mr.AGENT NAME\n: BA0000...\nIntermediary Code"
+    m_pos = re.search(r"(?i)Intermediary[\r\n\s]*Code", pdf_text)
+    if m_pos:
+        before_blk = pdf_text[max(0, m_pos.start() - 450):m_pos.start()]
+        if re.search(r"(?m)^:\s*[A-Z]{2}\d{6,}", before_blk):
+            found = _scan_block(before_blk, require_colon=True)
+            if found:
+                return found
+
+    # 2. Standard Star layout: agency appears AFTER Intermediary Code with leading ":"
     m_after = re.search(
         r"(?i)Intermediary[\r\n\s]*Code([\s\S]{0,1400}?)(?:Total\s*Premium|Period\s*of\s*Insurance|$)",
         pdf_text,
     )
     if m_after:
-        found = _scan_block(m_after.group(1))
+        found = _scan_block(m_after.group(1), require_colon=True)
         if found:
             return found
 
-    # PREMIA layout: agency appears right BEFORE Intermediary Code
-    m_pos = re.search(r"(?i)Intermediary[\r\n\s]*Code", pdf_text)
+    # 3. Fallback before Intermediary Code
     if m_pos:
-        before_blk = pdf_text[max(0, m_pos.start() - 450):m_pos.start()]
-        found = _scan_block(before_blk)
+        found = _scan_block(pdf_text[max(0, m_pos.start() - 450):m_pos.start()], require_colon=False)
         if found:
             return found
 
@@ -155,7 +163,7 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
             data["start_dt"] = data["start_dt"] or parse_any_date(m_cert.group(1))
             data["end_dt"] = data["end_dt"] or parse_any_date(m_cert.group(2))
 
-    # 6. Sum Insured (inline OR PREMIA stacked table: GOLD / SILVER -> 1000000)
+    # 6. Sum Insured (inline, PREMIA Floater "GOLD -> 1000000", OR PREMIA Individual "DOB -> MALE/FEMALE -> 25,00,000.00")
     m_si = re.search(
         r"(?i)(?:Basic\s*(?:Floater\s*)?)?Sum\s*Insured[ \t]*[:\-][ \t]*(?:Rs\.?|INR|₹)?[ \t]*([\d,]+(?:\.\d+)?)",
         pdf_text,
@@ -166,11 +174,20 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
             data["sum_insured"] = amt
     if not data["sum_insured"]:
         m_si_premia = re.search(
-            r"(?i)Sum\s*Insured\s*:[\s\S]{0,120}?\b(?:GOLD|SILVER)\b\s*[\r\n]+\s*([\d,]{6,15})\b",
+            r"(?i)Sum\s*Insured\s*:[\s\S]{0,120}?\b(?:GOLD|SILVER)\b\s*[\r\n]+\s*([\d,]{6,15}(?:\.\d{2})?)\b",
             pdf_text,
         )
         if m_si_premia:
             amt = clean_amount(m_si_premia.group(1))
+            if amt.isdigit() and int(amt) >= 100000:
+                data["sum_insured"] = amt
+    if not data["sum_insured"]:
+        m_si_ind = re.search(
+            r"(?i)(?:\d{2}/\d{2}/(?:19|20)\d{2})\s*[\r\n]+\s*(?:MALE|FEMALE)\s*[\r\n]+\s*([\d,]{6,15}(?:\.\d{2})?)\b",
+            pdf_text,
+        )
+        if m_si_ind:
+            amt = clean_amount(m_si_ind.group(1))
             if amt.isdigit() and int(amt) >= 100000:
                 data["sum_insured"] = amt
 
@@ -200,22 +217,32 @@ def parse_star_super_surplus(pdf_text: str) -> dict:
         elif re.search(r"(?i)\bCash\b", seg):
             data["premium_mode"] = "CASH"
 
-    # 9. DOB (Oldest Insured Person — supports DD-MMM-YYYY & DD/MM/YYYY; excludes inception/period dates)
+    # 9. DOB (Oldest Insured Person — handles BOTH standard table AND PREMIA Individual layout)
     first_inc_dt = None
     m_finc = re.search(rf"(?i)Date\s*of\s*Inception[\r\n\s]*of\s*first\s*policy[\r\n\s]*:?[\r\n\s]*{date_tok}", pdf_text)
     if m_finc:
         first_inc_dt = parse_any_date(m_finc.group(1))
 
     dobs = []
-    m_tbl = re.search(
-        r"(?i)(?:Details\s+of\s+Insured\s+Persons|Insured\s+Person\s+Details)\s*:?([\s\S]{0,2600}?)(?:Nominee\s+Details|Entered\s+by|$)",
+    for m_d in re.finditer(
+        r"(?i)(\d{2}[/\-](?:[A-Za-z]{3}|\d{2})[/\-](?:19|20)\d{2})\s*[\r\n\s]+(?:MALE|FEMALE)\b|(?:MALE|FEMALE)\s*[\r\n\s]+(\d{2}[/\-](?:[A-Za-z]{3}|\d{2})[/\-](?:19|20)\d{2})",
         pdf_text,
-    )
-    if m_tbl:
-        for m_d in re.finditer(r"\b(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2}|\d{2}/\d{2}/(?:19|20)\d{2})\b", m_tbl.group(1)):
-            dt = parse_any_date(m_d.group(1))
-            if dt and dt.year >= 1920 and dt != first_inc_dt and dt != data["start_dt"] and dt != data["end_dt"]:
-                dobs.append(dt)
+    ):
+        dt = parse_any_date(m_d.group(1) or m_d.group(2))
+        if dt and dt.year >= 1920 and dt != first_inc_dt and dt != data["start_dt"] and dt != data["end_dt"]:
+            dobs.append(dt)
+
+    if not dobs:
+        m_tbl = re.search(
+            r"(?i)(?:Details\s+of\s+Insured\s+Persons|Insured\s+Person\s+Details)\s*:?([\s\S]{0,2600}?)(?:Nominee\s+Details|Entered\s+by|$)",
+            pdf_text,
+        )
+        if m_tbl:
+            for m_d in re.finditer(r"\b(\d{2}\-[A-Za-z]{3}\-(?:19|20)\d{2}|\d{2}/\d{2}/(?:19|20)\d{2})\b", m_tbl.group(1)):
+                dt = parse_any_date(m_d.group(1))
+                if dt and dt.year >= 1920 and dt != first_inc_dt and dt != data["start_dt"] and dt != data["end_dt"]:
+                    dobs.append(dt)
+
     if dobs:
         data["dob"] = fmt_date(min(dobs))
 
