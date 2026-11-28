@@ -1,3 +1,33 @@
+const _CLIENT_MASTER_COLS = new Set([
+  "clientcode", "occupation", "mobile", "mobileno", "mobilenumber",
+  "mailid", "email", "emailid", "subagent", "familycode",
+]);
+const _ACCOUNTS_MASTER_COLS = new Set(["accounts", "account"]);
+const _RENEWAL_LIST_COLS = new Set(["pyppremium", "ourrenewal"]);
+const _SYSTEM_AUTO_COLS = new Set([
+  "dateofentry", "payoutmonth", "share", "share%", "insurancetype",
+  "policystatus", "reminderdate", "remark", "mail", "print", "folder",
+  "healthdatasheet", "yes/no/inadequate",
+]);
+
+function getUserLockReason(colName) {
+  if (!IS_USER_REPORT) return "";
+  const norm = String(colName || "").toLowerCase().replace(/[\s_\-]+/g, "");
+  if (_CLIENT_MASTER_COLS.has(norm)) {
+    return "ℹ️ '" + colName + "' aapki Client Master sheet se aata hai (PDF bug nahi hai). Client Master me Client Name check karein — aur kuch batana ho to Note me likh dein.";
+  }
+  if (_ACCOUNTS_MASTER_COLS.has(norm)) {
+    return "ℹ️ '" + colName + "' aapki Accounts Master sheet se aata hai (PDF bug nahi hai). Accounts Master rules check karein ya Note me likh dein.";
+  }
+  if (_RENEWAL_LIST_COLS.has(norm)) {
+    return "ℹ️ '" + colName + "' aapke Renewal List folder se aata hai (PDF bug nahi hai). Koi issue ho to Note me likh dein.";
+  }
+  if (_SYSTEM_AUTO_COLS.has(norm)) {
+    return "ℹ️ '" + colName + "' system/auto-calculated column hai (PDF se direct nahi aata). Agar Premium/DOB/Expiry galat ho to us cell ko select karein ya Note me likh dein.";
+  }
+  return "";
+}
+
 function toggleFilter() {
   onlyHighlighted = !onlyHighlighted;
   saveFilterState();
@@ -9,6 +39,13 @@ function toggleFilter() {
 }
 
 function toggleCell(rIdx, cIdx, tdEl) {
+  const colName = COLS[cIdx] || "";
+  const lockReason = getUserLockReason(colName);
+  if (lockReason) {
+    showStatus(lockReason, false);
+    return;
+  }
+
   const key = rIdx + "||" + cIdx;
   const currVal = getCellVal(rIdx, cIdx);
   const cur = highlights[key];
@@ -79,8 +116,10 @@ function renderTable() {
 
   COLS.forEach((col, cIdx) => {
     const th = document.createElement("th");
-    th.textContent = col;
+    const locked = Boolean(getUserLockReason(col));
+    th.textContent = locked ? ("🔒 " + col) : col;
     if (cIdx === nameColIdx) th.className = "sticky-name-hdr";
+    if (locked) th.title = "Non-PDF / Master column — cannot be ticked as PDF bug";
     htr.appendChild(th);
   });
   thead.appendChild(htr);
@@ -102,12 +141,16 @@ function renderTable() {
     COLS.forEach((col, cIdx) => {
       const td = document.createElement("td");
       const val = row[col] || "";
+      const lockReason = getUserLockReason(col);
       const entry = highlights[rIdx + "||" + cIdx];
       td.textContent = val || "—";
       if (!val) td.classList.add("empty-cell");
       if (cIdx === nameColIdx) td.classList.add("sticky-name");
 
-      if (!IS_USER_REPORT && entry && entry.state === "green") {
+      if (lockReason) {
+        td.classList.add("locked-cell");
+        td.title = lockReason;
+      } else if (!IS_USER_REPORT && entry && entry.state === "green") {
         td.classList.add("hl-green");
         const beforeTxt = entry.origVal || "[BLANK]";
         const nowTxt = val || "[BLANK]";
