@@ -18,11 +18,17 @@ from portal.state import (
     get_active_accounts_df,
     save_and_record_batch,
 )
+from portal.auth_wallet import (
+    render_wallet_banner_if_billable,
+    check_wallet_before_batch,
+)
 from portal.retest_engine import is_scanned_error, attach_retest_cache
 
 
 def render_upload_workspace(ctx):
     """Renders Mode 1 (Cloud Download) & Mode 2 (Direct Google Sheet / Local Excel) PDF uploader."""
+    render_wallet_banner_if_billable("m12")
+
     is_mode2, mode2_target_type = ctx["is_mode2"], ctx["mode2_target_type"]
     hdr1, hdr2 = st.columns([4, 1])
     with hdr1:
@@ -47,9 +53,11 @@ def render_upload_workspace(ctx):
         if not uploaded_pdfs:
             st.warning("Please upload at least one Policy PDF.")
         elif is_mode2 and mode2_target_type == "google_sheet" and not st.session_state.fixed_sheet_url:
-            st.warning("Please link your Policy Entry Google Sheet via the Left Sidebar first.")
+            st.warning("Please link your Policy Entry Google Sheet via **Left Sidebar → 🔌 Connectors** first.")
         elif is_mode2 and mode2_target_type == "local_excel" and not st.session_state.local_excel_path:
-            st.warning("Please link your Local Excel (.xlsx) file path via the Left Sidebar first.")
+            st.warning("Please link your Local Excel (.xlsx) file path via **Left Sidebar → 🔌 Connectors** first.")
+        elif not check_wallet_before_batch(len(uploaded_pdfs)):
+            return
         else:
             st.session_state.pop("last_results", None)
             master_df = get_active_master_df(ctx["manual_master_file"])
