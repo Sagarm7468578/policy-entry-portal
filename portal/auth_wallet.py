@@ -8,7 +8,7 @@ WALLET_MAX_RS = 500
 
 
 def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fallback_email: str = "", fallback_name: str = ""):
-    """Populates Streamlit session state uniformly after Google, WhatsApp OTP, Password, or Self-Signup login."""
+    """Populates Streamlit session state uniformly after Google, Email OTP, Password, or Self-Signup login."""
     uid = str(res.get("user_id") or fallback_uid or fallback_email).strip()
     uemail = str(res.get("user_email") or fallback_email or "").strip().lower()
     umobile = str(res.get("user_mobile") or "").strip()
@@ -46,7 +46,8 @@ def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fal
         "quick_pdf_bytes_cache": {},
     })
     st.session_state.pop("resolved_bug_notifs", None)
-    st.session_state.pop("wa_otp_sent_mobile", None)
+    st.session_state.pop("email_otp_sent_to", None)
+    st.session_state.pop("email_otp_name", None)
 
 
 def refresh_wallet_status() -> dict:
@@ -184,7 +185,7 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
     """
     Self-serve 3-Tab Login Screen:
       1. Google Sign-In (auto-registers new users + sends Welcome Email)
-      2. Mobile Number + WhatsApp OTP (auto-registers mobile + sends Welcome WhatsApp)
+      2. Email OTP (100% free instant 6-digit OTP via Gmail + auto-registers new users)
       3. User ID & Password (Sign In + Self-Serve Create New Account)
     """
     _, col2, _ = st.columns([1, 2.2, 1])
@@ -192,9 +193,9 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
         st.title("🛡️ MS.Soft Policy Mitra")
         st.caption("All-in-One Insurance Advisor Automation Suite")
 
-        tab_g, tab_mob, tab_uid = st.tabs([
+        tab_g, tab_otp, tab_uid = st.tabs([
             "🔵 Google Login",
-            "📱 Mobile OTP (WhatsApp)",
+            "📧 Email OTP",
             "🔑 User ID & Password",
         ])
 
@@ -210,50 +211,64 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
                 if st.button("🔵 Continue with Google", type="primary", use_container_width=True):
                     st.login()
             else:
-                st.warning("⚠️ Google Sign-In is not configured in Secrets. Please use Mobile OTP or User ID & Password tab.")
+                st.warning("⚠️ Google Sign-In is not configured in Secrets. Please use Email OTP or User ID & Password tab.")
 
-        # --- TAB 2: MOBILE NUMBER + WHATSAPP OTP ---
-        with tab_mob:
-            st.caption("Enter your 10-digit WhatsApp mobile number to receive an instant Login OTP.")
-            sent_mob = st.session_state.get("wa_otp_sent_mobile", "")
+        # --- TAB 2: EMAIL OTP (FREE & INSTANT) ---
+        with tab_otp:
+            st.caption("Enter your Email ID to receive an instant 6-digit Login OTP (no password needed).")
+            sent_email = st.session_state.get("email_otp_sent_to", "")
 
-            with st.form("wa_send_otp_form"):
-                mob_name = st.text_input("Your Name (for new users)", value=st.session_state.get("wa_otp_name", ""), placeholder="e.g. Rahul Sharma")
-                mob_inp = st.text_input("WhatsApp Mobile Number (10 digits)", value=sent_mob, max_chars=13, placeholder="e.g. 9876543210")
-                if st.form_submit_button("📲 Send WhatsApp OTP", type="primary", use_container_width=True):
-                    if not mob_inp.strip():
-                        st.warning("Please enter your 10-digit mobile number.")
+            with st.form("email_send_otp_form"):
+                otp_name = st.text_input(
+                    "Your Name (for new users)",
+                    value=st.session_state.get("email_otp_name", ""),
+                    placeholder="e.g. Rahul Sharma",
+                )
+                otp_email = st.text_input(
+                    "Email ID *",
+                    value=sent_email,
+                    placeholder="e.g. advisor@gmail.com",
+                )
+                btn_lbl = "🔄 Resend Email OTP" if sent_email else "📩 Send Email OTP"
+                if st.form_submit_button(btn_lbl, type="primary", use_container_width=True):
+                    clean_em = otp_email.strip().lower()
+                    if not clean_em or "@" not in clean_em or "." not in clean_em.split("@")[-1]:
+                        st.warning("Please enter a valid Email ID.")
                     else:
-                        with st.spinner("Sending OTP to WhatsApp..."):
-                            otp_res = call_backend({"action": "send_mobile_otp", "mobile": mob_inp.strip()})
+                        with st.spinner("Sending 6-digit OTP to your Email..."):
+                            otp_res = call_backend({"action": "send_email_otp", "email": clean_em})
                         if otp_res.get("success"):
-                            st.session_state["wa_otp_sent_mobile"] = mob_inp.strip()
-                            st.session_state["wa_otp_name"] = mob_name.strip()
-                            st.success(f"✅ {otp_res.get('message', 'OTP sent!')}")
+                            st.session_state["email_otp_sent_to"] = clean_em
+                            st.session_state["email_otp_name"] = otp_name.strip()
+                            st.session_state["email_otp_notice"] = otp_res.get("message", f"OTP sent to {clean_em}!")
                             st.rerun()
                         else:
-                            st.error(otp_res.get("message", "Could not send WhatsApp OTP."))
+                            st.error(otp_res.get("message", "Could not send Email OTP."))
 
-            if st.session_state.get("wa_otp_sent_mobile"):
-                with st.form("wa_verify_otp_form"):
-                    otp_code = st.text_input("Enter 6-Digit WhatsApp OTP", max_chars=6, placeholder="123456")
+            if st.session_state.get("email_otp_sent_to"):
+                if st.session_state.get("email_otp_notice"):
+                    st.success(f"✅ {st.session_state['email_otp_notice']} *(Check Spam/Promotions if not in Inbox)*")
+                with st.form("email_verify_otp_form"):
+                    otp_code = st.text_input("Enter 6-Digit Email OTP", max_chars=6, placeholder="123456")
                     if st.form_submit_button("✅ Verify OTP & Login", type="primary", use_container_width=True):
                         if not otp_code.strip():
-                            st.warning("Please enter the 6-digit OTP.")
+                            st.warning("Please enter the 6-digit OTP sent to your email.")
                         else:
                             with st.spinner("Verifying OTP..."):
                                 v_res = call_backend({
-                                    "action": "verify_mobile_otp",
-                                    "mobile": st.session_state["wa_otp_sent_mobile"],
+                                    "action": "verify_email_otp",
+                                    "email": st.session_state["email_otp_sent_to"],
                                     "otp": otp_code.strip(),
-                                    "name": st.session_state.get("wa_otp_name", ""),
+                                    "name": st.session_state.get("email_otp_name", ""),
                                 })
                             if v_res.get("success"):
+                                st.session_state.pop("email_otp_notice", None)
                                 apply_login_session(
-                                    "mobile_otp",
+                                    "email_otp",
                                     v_res,
-                                    fallback_uid=v_res.get("user_id", ""),
-                                    fallback_name=st.session_state.get("wa_otp_name", ""),
+                                    fallback_uid=v_res.get("user_id", st.session_state["email_otp_sent_to"]),
+                                    fallback_email=st.session_state["email_otp_sent_to"],
+                                    fallback_name=st.session_state.get("email_otp_name", ""),
                                 )
                                 st.rerun()
                             else:
@@ -300,7 +315,7 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
                     with c_r3:
                         reg_email = st.text_input("Email ID *", placeholder="you@gmail.com")
                     with c_r4:
-                        reg_mobile = st.text_input("Mobile Number (WhatsApp)", max_chars=13, placeholder="10-digit mobile")
+                        reg_mobile = st.text_input("Mobile Number", max_chars=13, placeholder="10-digit mobile")
 
                     if st.form_submit_button("🚀 Create Account & Start Free Trial", type="primary", use_container_width=True):
                         if not reg_name.strip() or not reg_uid.strip() or not reg_pass.strip() or not reg_email.strip():
