@@ -1,0 +1,338 @@
+import streamlit as st
+from portal.backend import call_backend
+
+SUPPORT_EMAIL = "mahajansagar746@gmail.com"
+ENTRY_RATE_RS = 0.50
+WALLET_MIN_RS = 10
+WALLET_MAX_RS = 500
+
+
+def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fallback_email: str = "", fallback_name: str = ""):
+    """Populates Streamlit session state uniformly after Google, WhatsApp OTP, Password, or Self-Signup login."""
+    uid = str(res.get("user_id") or fallback_uid or fallback_email).strip()
+    uemail = str(res.get("user_email") or fallback_email or "").strip().lower()
+    umobile = str(res.get("user_mobile") or "").strip()
+    uname = str(res.get("user_name") or fallback_name or uid).strip()
+    plan_type = str(res.get("plan_type") or "").strip()
+    expiry = str(res.get("expiry") or "").strip()
+    wallet_bal = float(res.get("wallet_balance") or 0.0)
+    billable = bool(res.get("billable", False))
+    trial_expired = bool(res.get("trial_expired", False))
+
+    st.session_state.update({
+        "logged_in": True,
+        "auth_method": auth_method,
+        "user_id": uid,
+        "user_email": uemail,
+        "user_mobile": umobile,
+        "user_name": uname,
+        "plan_type": plan_type,
+        "expiry": expiry,
+        "wallet_balance": wallet_bal,
+        "billable": billable,
+        "trial_expired": trial_expired,
+        "google_auth_error": "",
+        "saved_health_rows": None,
+        "settings_loaded": False,
+        "linked_master_df": None,
+        "linked_master_error": "",
+        "health_accounts_df": None,
+        "motor_accounts_df": None,
+        "sme_accounts_df": None,
+        "drive_scan_info": None,
+        "drive_last_scan_key": "",
+        "batch_history": [],
+        "round_counter": 0,
+        "quick_pdf_bytes_cache": {},
+    })
+    st.session_state.pop("resolved_bug_notifs", None)
+    st.session_state.pop("wa_otp_sent_mobile", None)
+
+
+def refresh_wallet_status() -> dict:
+    """Fetches latest Plan Type, Expiry & Wallet Balance from Users sheet."""
+    res = call_backend({
+        "action": "get_wallet_status",
+        "user_id": st.session_state.get("user_id", ""),
+        "user_email": st.session_state.get("user_email", ""),
+        "user_mobile": st.session_state.get("user_mobile", ""),
+    })
+    if res.get("success"):
+        st.session_state["plan_type"] = str(res.get("plan_type") or st.session_state.get("plan_type", ""))
+        st.session_state["expiry"] = str(res.get("expiry") or st.session_state.get("expiry", ""))
+        st.session_state["wallet_balance"] = float(res.get("wallet_balance") or 0.0)
+        st.session_state["billable"] = bool(res.get("billable", False))
+        st.session_state["trial_expired"] = bool(res.get("trial_expired", False))
+    return res
+
+
+def render_wallet_banner_if_billable(key_prefix: str = "wl"):
+    """
+    Shows Wallet Balance + ₹10–₹500 Recharge form ONLY for Paid / Trial-Expired users.
+    Lifetime Free and active 7-Day Free Trial users see zero clutter.
+    """
+    if not st.session_state.get("billable", False):
+        return
+
+    bal = float(st.session_state.get("wallet_balance") or 0.0)
+    trial_exp = bool(st.session_state.get("trial_expired", False))
+    entries_left = int(bal // ENTRY_RATE_RS)
+
+    if trial_exp and bal < ENTRY_RATE_RS:
+        st.warning(
+            f"⏰ **Your 7 Days Free Trial has ended.** Recharge your Wallet (**₹{WALLET_MIN_RS} – ₹{WALLET_MAX_RS}**) "
+            f"to continue at just **₹{ENTRY_RATE_RS:.2f} / correct entry** *(reported bug entries are auto-refunded!)*."
+        )
+    else:
+        c1, c2 = st.columns([3.6, 1.2])
+        with c1:
+            st.info(
+                f"💰 **Wallet Balance: ₹{bal:.2f}** (~{entries_left} entries @ ₹{ENTRY_RATE_RS:.2f}/entry) — "
+                f"*Only correct entries are charged; reported bug entries get auto-refunded!*"
+            )
+        with c2:
+            if st.button("🔄 Refresh Wallet", use_container_width=True, key=f"{key_prefix}_refresh_wallet"):
+                with st.spinner("Checking wallet..."):
+                    refresh_wallet_status()
+                st.rerun()
+
+    with st.expander(f"💳 Add Wallet Balance (Min ₹{WALLET_MIN_RS} / Max ₹{WALLET_MAX_RS})", expanded=(bal < ENTRY_RATE_RS)):
+        st.caption(
+            f"Pay between **₹{WALLET_MIN_RS}** and **₹{WALLET_MAX_RS}** via UPI, then submit your Amount & UPI Ref / UTR below. "
+            f"For any payment query, mail **{SUPPORT_EMAIL}**."
+        )
+        with st.form(f"{key_prefix}_wallet_recharge_form"):
+            r1, r2 = st.columns(2)
+            with r1:
+                amt = st.number_input(
+                    "Recharge Amount (₹)",
+                    min_value=WALLET_MIN_RS,
+                    max_value=WALLET_MAX_RS,
+                    value=100,
+                    step=10,
+                )
+            with r2:
+                utr = st.text_input("UPI Reference / UTR Number", placeholder="e.g. 432198765432")
+            if st.form_submit_button("📩 Submit Recharge Request", type="primary", use_container_width=True):
+                if not utr.strip():
+                    st.warning("Please enter your UPI Reference / UTR number.")
+                else:
+                    with st.spinner("Submitting recharge request..."):
+                        req_res = call_backend({
+                            "action": "request_wallet_recharge",
+                            "user_id": st.session_state.get("user_id", ""),
+                            "user_email": st.session_state.get("user_email", ""),
+                            "amount": int(amt),
+                            "utr": utr.strip(),
+                        })
+                    if req_res.get("success"):
+                        st.success(req_res.get("message", "Recharge request submitted!"))
+                    else:
+                        st.error(req_res.get("message", "Could not submit recharge request."))
+
+
+def check_wallet_before_batch(pdf_count: int) -> bool:
+    """
+    Verifies a billable user has enough wallet balance before starting PDF extraction.
+    Returns True if allowed to proceed; False (and shows error) if insufficient balance.
+    """
+    if not st.session_state.get("billable", False) or pdf_count <= 0:
+        return True
+
+    refresh_wallet_status()
+    if not st.session_state.get("billable", False):
+        return True
+
+    bal = float(st.session_state.get("wallet_balance") or 0.0)
+    needed = round(pdf_count * ENTRY_RATE_RS, 2)
+    if bal < needed:
+        st.error(
+            f"❌ **Insufficient Wallet Balance!** Selected **{pdf_count} PDFs** require **₹{needed:.2f}** "
+            f"(₹{ENTRY_RATE_RS:.2f}/entry), but available balance is **₹{bal:.2f}**. "
+            f"Please recharge **₹{WALLET_MIN_RS} – ₹{WALLET_MAX_RS}** above or select fewer PDFs."
+        )
+        return False
+    return True
+
+
+def charge_wallet_for_batch(done_count: int, batch_id: str) -> str:
+    """
+    Deducts ₹0.50 x done_count from a Paid user's wallet after extraction completes.
+    Returns a status note string to append to save_msg (empty string for Free/Trial users).
+    """
+    if not st.session_state.get("billable", False) or done_count <= 0:
+        return ""
+
+    res = call_backend({
+        "action": "deduct_entry_wallet",
+        "user_id": st.session_state.get("user_id", ""),
+        "user_email": st.session_state.get("user_email", ""),
+        "user_mobile": st.session_state.get("user_mobile", ""),
+        "entry_count": int(done_count),
+        "batch_id": str(batch_id or ""),
+    })
+    if res.get("success"):
+        charged = float(res.get("charged") or 0.0)
+        new_bal = float(res.get("wallet_balance") or 0.0)
+        st.session_state["wallet_balance"] = new_bal
+        if charged > 0:
+            return f"💰 Wallet Charged: ₹{charged:.2f} ({done_count} entries @ ₹{ENTRY_RATE_RS:.2f}) | Balance: ₹{new_bal:.2f}"
+    return ""
+
+
+def render_portal_login_screen(google_configured: bool, google_logged_in: bool, g_email: str):
+    """
+    Self-serve 3-Tab Login Screen:
+      1. Google Sign-In (auto-registers new users + sends Welcome Email)
+      2. Mobile Number + WhatsApp OTP (auto-registers mobile + sends Welcome WhatsApp)
+      3. User ID & Password (Sign In + Self-Serve Create New Account)
+    """
+    _, col2, _ = st.columns([1, 2.2, 1])
+    with col2:
+        st.title("🛡️ MS.Soft Policy Mitra")
+        st.caption("All-in-One Insurance Advisor Automation Suite")
+
+        tab_g, tab_mob, tab_uid = st.tabs([
+            "🔵 Google Login",
+            "📱 Mobile OTP (WhatsApp)",
+            "🔑 User ID & Password",
+        ])
+
+        # --- TAB 1: GOOGLE LOGIN ---
+        with tab_g:
+            if google_logged_in and st.session_state.google_auth_error:
+                st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
+                if st.button("🔄 Sign in with Another Google Account", type="primary", use_container_width=True):
+                    st.session_state.google_auth_error = ""
+                    st.logout()
+            elif google_configured:
+                st.info("✨ **New User?** Just click below — your account starts instantly with a **7 Days Free Trial** & setup guide on Email!")
+                if st.button("🔵 Continue with Google", type="primary", use_container_width=True):
+                    st.login()
+            else:
+                st.warning("⚠️ Google Sign-In is not configured in Secrets. Please use Mobile OTP or User ID & Password tab.")
+
+        # --- TAB 2: MOBILE NUMBER + WHATSAPP OTP ---
+        with tab_mob:
+            st.caption("Enter your 10-digit WhatsApp mobile number to receive an instant Login OTP.")
+            sent_mob = st.session_state.get("wa_otp_sent_mobile", "")
+
+            with st.form("wa_send_otp_form"):
+                mob_name = st.text_input("Your Name (for new users)", value=st.session_state.get("wa_otp_name", ""), placeholder="e.g. Rahul Sharma")
+                mob_inp = st.text_input("WhatsApp Mobile Number (10 digits)", value=sent_mob, max_chars=13, placeholder="e.g. 9876543210")
+                if st.form_submit_button("📲 Send WhatsApp OTP", type="primary", use_container_width=True):
+                    if not mob_inp.strip():
+                        st.warning("Please enter your 10-digit mobile number.")
+                    else:
+                        with st.spinner("Sending OTP to WhatsApp..."):
+                            otp_res = call_backend({"action": "send_mobile_otp", "mobile": mob_inp.strip()})
+                        if otp_res.get("success"):
+                            st.session_state["wa_otp_sent_mobile"] = mob_inp.strip()
+                            st.session_state["wa_otp_name"] = mob_name.strip()
+                            st.success(f"✅ {otp_res.get('message', 'OTP sent!')}")
+                            st.rerun()
+                        else:
+                            st.error(otp_res.get("message", "Could not send WhatsApp OTP."))
+
+            if st.session_state.get("wa_otp_sent_mobile"):
+                with st.form("wa_verify_otp_form"):
+                    otp_code = st.text_input("Enter 6-Digit WhatsApp OTP", max_chars=6, placeholder="123456")
+                    if st.form_submit_button("✅ Verify OTP & Login", type="primary", use_container_width=True):
+                        if not otp_code.strip():
+                            st.warning("Please enter the 6-digit OTP.")
+                        else:
+                            with st.spinner("Verifying OTP..."):
+                                v_res = call_backend({
+                                    "action": "verify_mobile_otp",
+                                    "mobile": st.session_state["wa_otp_sent_mobile"],
+                                    "otp": otp_code.strip(),
+                                    "name": st.session_state.get("wa_otp_name", ""),
+                                })
+                            if v_res.get("success"):
+                                apply_login_session(
+                                    "mobile_otp",
+                                    v_res,
+                                    fallback_uid=v_res.get("user_id", ""),
+                                    fallback_name=st.session_state.get("wa_otp_name", ""),
+                                )
+                                st.rerun()
+                            else:
+                                st.error(v_res.get("message", "Invalid or expired OTP."))
+
+        # --- TAB 3: USER ID & PASSWORD (SIGN IN + SELF-SERVE CREATE ACCOUNT) ---
+        with tab_uid:
+            auth_action = st.radio(
+                "Account Option",
+                ["Sign In (Existing User)", "✨ Create New Account"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="uid_auth_mode_radio",
+            )
+            if auth_action.startswith("Sign In"):
+                with st.form("login_form"):
+                    user_id = st.text_input("User ID or Email")
+                    password = st.text_input("Password", type="password")
+                    if st.form_submit_button("🔐 Sign In", type="primary", use_container_width=True):
+                        if not user_id.strip() or not password.strip():
+                            st.warning("Please enter both User ID and Password.")
+                        else:
+                            with st.spinner("Verifying credentials..."):
+                                result = call_backend({
+                                    "action": "login",
+                                    "user_id": user_id.strip(),
+                                    "password": password.strip(),
+                                })
+                            if result.get("success"):
+                                apply_login_session("password", result, fallback_uid=user_id.strip())
+                                st.rerun()
+                            else:
+                                st.error(result.get("message", "Invalid credentials."))
+            else:
+                st.caption("Create your own User ID & Password — 7 Days Free Trial + Welcome Guide starts automatically!")
+                with st.form("register_form"):
+                    reg_name = st.text_input("Full Name *", placeholder="e.g. Rajesh Verma")
+                    c_r1, c_r2 = st.columns(2)
+                    with c_r1:
+                        reg_uid = st.text_input("Choose User ID *", placeholder="e.g. rajesh_bima")
+                    with c_r2:
+                        reg_pass = st.text_input("Create Password *", type="password", placeholder="Min 4 characters")
+                    c_r3, c_r4 = st.columns(2)
+                    with c_r3:
+                        reg_email = st.text_input("Email ID *", placeholder="you@gmail.com")
+                    with c_r4:
+                        reg_mobile = st.text_input("Mobile Number (WhatsApp)", max_chars=13, placeholder="10-digit mobile")
+
+                    if st.form_submit_button("🚀 Create Account & Start Free Trial", type="primary", use_container_width=True):
+                        if not reg_name.strip() or not reg_uid.strip() or not reg_pass.strip() or not reg_email.strip():
+                            st.warning("Please fill all required (*) fields.")
+                        else:
+                            with st.spinner("Creating your account & sending Welcome Guide..."):
+                                reg_res = call_backend({
+                                    "action": "register_user",
+                                    "name": reg_name.strip(),
+                                    "user_id": reg_uid.strip(),
+                                    "password": reg_pass.strip(),
+                                    "email": reg_email.strip(),
+                                    "mobile": reg_mobile.strip(),
+                                })
+                            if reg_res.get("success"):
+                                apply_login_session(
+                                    "password",
+                                    reg_res,
+                                    fallback_uid=reg_uid.strip(),
+                                    fallback_email=reg_email.strip(),
+                                    fallback_name=reg_name.strip(),
+                                )
+                                st.rerun()
+                            else:
+                                st.error(reg_res.get("message", "Could not create account."))
+
+        st.divider()
+        st.markdown(
+            "<div style='text-align:center; font-size:0.82rem; color:#475569; "
+            "background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;'>"
+            "📩 <strong>For any query, please share details on mail:</strong> "
+            f"<a href='mailto:{SUPPORT_EMAIL}' style='color:#1d4ed8; font-weight:600; text-decoration:none;'>{SUPPORT_EMAIL}</a>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
