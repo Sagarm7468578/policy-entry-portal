@@ -38,6 +38,7 @@ VERIFIED_FILL_MANUAL_PREMIUM_MODE = {
     ("NATIONAL", "PERSONAL ACCIDENT"),
     ("NEW INDIA", "YUVA BHARAT"),
     ("TATA AIG", "TRAVEL"),
+    ("CARE HEALTH", "CARE SUPREME"),
     ("CARE HEALTH", "EXPLORE"),
     ("ICICI LOMBARD", "GROUP HEALTH"),
     ("UNITED INDIA", "FAMILY MEDICARE"),
@@ -114,8 +115,9 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
     if re.search(r"(?i)(?:Ported\s*Policy|Portable\s*Case|Portability(?:/Migration)?)\s*[:\-]?\s*[\r\n\s]*No\b", pdf_text):
         return ""
 
+    # Pattern 1: Niva Bupa portability letter (also handles typo "Limitedand Date of Initiation")
     m_nb = re.search(
-        r"(?i)intimate\s+you\s+that\s+your\s+policy[\s\S]{0,60}?\bof\s+([A-Za-z][A-Za-z .&\-]{3,90}?)\s+and\s+Date\s+of\s+Initiation",
+        r"(?i)intimate\s+you\s+that\s+your\s+policy[\s\S]{0,60}?\bof\s+([A-Za-z][A-Za-z .&\-]{3,90}?)\s*and\s+Date\s+of\s+Initiation",
         pdf_text,
     )
     if m_nb:
@@ -123,6 +125,7 @@ def _detect_previous_insurer_on_port(company: str, pdf_text: str) -> str:
         if prev and prev != comp:
             return prev
 
+    # Pattern 2: Care Health "Portability Details of the Insured -> Previous Insurer :"
     m_care = re.search(
         r"(?i)Portability\s+Details\s+of\s+the\s+Insured[\s\S]{0,80}?Previous\s+Insurer\s*[:\-]\s*[\r\n\s]*([^\r\n]{3,90})",
         pdf_text,
