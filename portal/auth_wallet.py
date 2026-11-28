@@ -8,7 +8,7 @@ WALLET_MAX_RS = 500
 
 
 def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fallback_email: str = "", fallback_name: str = ""):
-    """Populates Streamlit session state uniformly after Google, Email OTP, Password, or Self-Signup login."""
+    """Populates Streamlit session state uniformly after Google or Email OTP login."""
     uid = str(res.get("user_id") or fallback_uid or fallback_email).strip()
     uemail = str(res.get("user_email") or fallback_email or "").strip().lower()
     umobile = str(res.get("user_mobile") or "").strip()
@@ -183,20 +183,18 @@ def charge_wallet_for_batch(done_count: int, batch_id: str) -> str:
 
 def render_portal_login_screen(google_configured: bool, google_logged_in: bool, g_email: str):
     """
-    Self-serve 3-Tab Login Screen:
+    Password-less 2-Tab Login Screen:
       1. Google Sign-In (auto-registers new users + sends Welcome Email)
       2. Email OTP (100% free instant 6-digit OTP via Gmail + auto-registers new users)
-      3. User ID & Password (Sign In + Self-Serve Create New Account)
     """
     _, col2, _ = st.columns([1, 2.2, 1])
     with col2:
         st.title("🛡️ MS.Soft Policy Mitra")
         st.caption("All-in-One Insurance Advisor Automation Suite")
 
-        tab_g, tab_otp, tab_uid = st.tabs([
+        tab_g, tab_otp = st.tabs([
             "🔵 Google Login",
             "📧 Email OTP",
-            "🔑 User ID & Password",
         ])
 
         # --- TAB 1: GOOGLE LOGIN ---
@@ -211,7 +209,7 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
                 if st.button("🔵 Continue with Google", type="primary", use_container_width=True):
                     st.login()
             else:
-                st.warning("⚠️ Google Sign-In is not configured in Secrets. Please use Email OTP or User ID & Password tab.")
+                st.warning("⚠️ Google Sign-In is not configured in Secrets. Please use the Email OTP tab.")
 
         # --- TAB 2: EMAIL OTP (FREE & INSTANT) ---
         with tab_otp:
@@ -273,74 +271,6 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
                                 st.rerun()
                             else:
                                 st.error(v_res.get("message", "Invalid or expired OTP."))
-
-        # --- TAB 3: USER ID & PASSWORD (SIGN IN + SELF-SERVE CREATE ACCOUNT) ---
-        with tab_uid:
-            auth_action = st.radio(
-                "Account Option",
-                ["Sign In (Existing User)", "✨ Create New Account"],
-                horizontal=True,
-                label_visibility="collapsed",
-                key="uid_auth_mode_radio",
-            )
-            if auth_action.startswith("Sign In"):
-                with st.form("login_form"):
-                    user_id = st.text_input("User ID or Email")
-                    password = st.text_input("Password", type="password")
-                    if st.form_submit_button("🔐 Sign In", type="primary", use_container_width=True):
-                        if not user_id.strip() or not password.strip():
-                            st.warning("Please enter both User ID and Password.")
-                        else:
-                            with st.spinner("Verifying credentials..."):
-                                result = call_backend({
-                                    "action": "login",
-                                    "user_id": user_id.strip(),
-                                    "password": password.strip(),
-                                })
-                            if result.get("success"):
-                                apply_login_session("password", result, fallback_uid=user_id.strip())
-                                st.rerun()
-                            else:
-                                st.error(result.get("message", "Invalid credentials."))
-            else:
-                st.caption("Create your own User ID & Password — 7 Days Free Trial + Welcome Guide starts automatically!")
-                with st.form("register_form"):
-                    reg_name = st.text_input("Full Name *", placeholder="e.g. Rajesh Verma")
-                    c_r1, c_r2 = st.columns(2)
-                    with c_r1:
-                        reg_uid = st.text_input("Choose User ID *", placeholder="e.g. rajesh_bima")
-                    with c_r2:
-                        reg_pass = st.text_input("Create Password *", type="password", placeholder="Min 4 characters")
-                    c_r3, c_r4 = st.columns(2)
-                    with c_r3:
-                        reg_email = st.text_input("Email ID *", placeholder="you@gmail.com")
-                    with c_r4:
-                        reg_mobile = st.text_input("Mobile Number", max_chars=13, placeholder="10-digit mobile")
-
-                    if st.form_submit_button("🚀 Create Account & Start Free Trial", type="primary", use_container_width=True):
-                        if not reg_name.strip() or not reg_uid.strip() or not reg_pass.strip() or not reg_email.strip():
-                            st.warning("Please fill all required (*) fields.")
-                        else:
-                            with st.spinner("Creating your account & sending Welcome Guide..."):
-                                reg_res = call_backend({
-                                    "action": "register_user",
-                                    "name": reg_name.strip(),
-                                    "user_id": reg_uid.strip(),
-                                    "password": reg_pass.strip(),
-                                    "email": reg_email.strip(),
-                                    "mobile": reg_mobile.strip(),
-                                })
-                            if reg_res.get("success"):
-                                apply_login_session(
-                                    "password",
-                                    reg_res,
-                                    fallback_uid=reg_uid.strip(),
-                                    fallback_email=reg_email.strip(),
-                                    fallback_name=reg_name.strip(),
-                                )
-                                st.rerun()
-                            else:
-                                st.error(reg_res.get("message", "Could not create account."))
 
         st.divider()
         st.markdown(
