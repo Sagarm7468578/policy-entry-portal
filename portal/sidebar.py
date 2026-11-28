@@ -22,28 +22,35 @@ from portal.sidebar_config import (
     render_custom_columns_panel,
 )
 
+SUPPORT_EMAIL = "mahajansagar746@gmail.com"
+
 _FROZEN_SIDEBAR_USER_CSS = """
 <style>
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 0 !important;
+}
 section[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.pm-sb-user-wrap),
 section[data-testid="stSidebar"] .element-container:has(.pm-sb-user-wrap) {
     position: sticky !important;
     top: 0 !important;
     z-index: 990 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
     background: var(--secondary-background-color, #f0f2f6) !important;
 }
 .pm-sb-user-wrap {
     position: relative;
     background: var(--secondary-background-color, #f0f2f6);
-    padding: 6px 0 8px 0;
-    margin-bottom: 4px;
+    padding: 4px 0 8px 0;
+    margin: 0;
 }
 .pm-sb-user-wrap::before {
     content: "";
     position: absolute;
     left: -1.5rem;
     right: -1.5rem;
-    top: -2.5rem;
-    height: 2.5rem;
+    top: -3rem;
+    height: 3rem;
     background: var(--secondary-background-color, #f0f2f6);
     pointer-events: none;
 }
@@ -77,6 +84,29 @@ section[data-testid="stSidebar"] .element-container:has(.pm-sb-user-wrap) {
     margin-top: 3px;
     font-size: 0.84rem;
 }
+.pm-sb-wallet {
+    margin-top: 3px;
+    font-size: 0.82rem;
+    color: #0f766e;
+    font-weight: 600;
+}
+.pm-sb-support {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    font-size: 0.76rem;
+    color: #475569;
+    line-height: 1.45;
+    text-align: center;
+}
+.pm-sb-support a {
+    color: #1d4ed8;
+    text-decoration: none;
+    font-weight: 600;
+    word-break: break-all;
+}
 </style>
 """
 
@@ -84,23 +114,80 @@ section[data-testid="stSidebar"] .element-container:has(.pm-sb-user-wrap) {
 def _render_frozen_user_card():
     display_user = _html.escape(str(st.session_state.user_name or st.session_state.user_id or ""))
     raw_email = str(st.session_state.user_email or "").strip()
-    expiry_txt = _html.escape(str(st.session_state.expiry or ""))
+    raw_mobile = str(st.session_state.get("user_mobile") or "").strip()
+    plan_type = str(st.session_state.get("plan_type") or "").strip().upper()
+    expiry_raw = str(st.session_state.expiry or "").strip()
+    wallet_bal = st.session_state.get("wallet_balance", None)
+
     email_html = (
         f"<div class='pm-sb-user-email'>📧 <code>{_html.escape(raw_email)}</code></div>"
         if raw_email
-        else ""
+        else (
+            f"<div class='pm-sb-user-email'>📱 <code>{_html.escape(raw_mobile)}</code></div>"
+            if raw_mobile
+            else ""
+        )
     )
-    st.markdown(_FROZEN_SIDEBAR_USER_CSS, unsafe_allow_html=True)
+
+    if plan_type == "LIFETIME FREE" or expiry_raw.upper() == "LIFETIME FREE":
+        plan_html = "<div class='pm-sb-user-exp'>✨ Plan: <strong>LIFETIME FREE</strong></div>"
+        wallet_html = ""
+    elif "TRIAL" in plan_type:
+        plan_html = f"<div class='pm-sb-user-exp'>🎁 Free Trial Till: <strong>{_html.escape(expiry_raw)}</strong></div>"
+        wallet_html = (
+            f"<div class='pm-sb-wallet'>💰 Wallet: ₹{float(wallet_bal):.2f}</div>"
+            if wallet_bal is not None and float(wallet_bal) > 0
+            else ""
+        )
+    elif plan_type == "PAID":
+        bal_num = float(wallet_bal or 0)
+        plan_html = "<div class='pm-sb-user-exp'>💳 Plan: <strong>Pay-Per-Entry (₹0.50)</strong></div>"
+        wallet_html = f"<div class='pm-sb-wallet'>💰 Wallet Balance: ₹{bal_num:.2f}</div>"
+    else:
+        plan_html = f"<div class='pm-sb-user-exp'>📅 Valid Till: <strong>{_html.escape(expiry_raw)}</strong></div>"
+        wallet_html = (
+            f"<div class='pm-sb-wallet'>💰 Wallet: ₹{float(wallet_bal):.2f}</div>"
+            if wallet_bal is not None and float(wallet_bal) > 0
+            else ""
+        )
+
+    # Single markdown block (CSS + HTML together) removes Streamlit's 1rem vertical gap & eliminates scroll jump
     st.markdown(
+        f"{_FROZEN_SIDEBAR_USER_CSS}"
         "<div class='pm-sb-user-wrap'>"
         "  <div class='pm-sb-user-card'>"
         f"    <div class='pm-sb-user-name'>👤 {display_user}</div>"
         f"    {email_html}"
-        f"    <div class='pm-sb-user-exp'>📅 Valid Till: <strong>{expiry_txt}</strong></div>"
+        f"    {plan_html}"
+        f"    {wallet_html}"
         "  </div>"
         "</div>",
         unsafe_allow_html=True,
     )
+
+
+def _count_linked_connectors(is_mode2: bool, is_mode3: bool, is_bugging: bool) -> int:
+    cnt = 0
+    if (is_mode3 or is_bugging) and st.session_state.get("mode3_excel_url"):
+        cnt += 1
+    if (is_mode3 or is_bugging) and any(
+        st.session_state.get(k) for k in ("health_folder_url", "motor_folder_url", "sme_folder_url")
+    ):
+        cnt += 1
+    if is_mode2 and (st.session_state.get("fixed_sheet_url") or st.session_state.get("local_excel_path")):
+        cnt += 1
+    if st.session_state.get("client_master_url"):
+        cnt += 1
+    if any(
+        st.session_state.get(k) for k in ("health_accounts_url", "motor_accounts_url", "sme_accounts_url")
+    ):
+        cnt += 1
+    if any(
+        st.session_state.get(k)
+        for k in ("health_renewal_folder_url", "motor_renewal_folder_url", "sme_renewal_folder_url")
+    ):
+        cnt += 1
+    return cnt
 
 
 def render_sidebar(active_headers, is_custom_cols, google_configured):
@@ -155,49 +242,53 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
         )
         st.divider()
 
-        # Mode-specific panels (Mode 3 / Bugging Mode / Mode 2)
-        if is_mode3 or is_bugging:
-            render_mode3_panels(is_mode3, is_bugging)
-        if is_mode2:
-            mode2_target_type = render_mode2_panel()
+        # Single collapsible "🔌 Connectors" dropdown containing all linked folders, sheets, masters & settings
+        linked_cnt = _count_linked_connectors(is_mode2, is_mode3, is_bugging)
+        conn_label = f"🔌 Connectors ({linked_cnt} Linked)" if linked_cnt else "🔌 Connectors"
+        with st.expander(conn_label, expanded=False):
+            if is_mode3 or is_bugging:
+                render_mode3_panels(is_mode3, is_bugging)
+            if is_mode2:
+                mode2_target_type = render_mode2_panel()
 
-        # Master data & folder panels
-        m_count, manual_master_file = render_client_master_panel()
-        manual_acc_files = render_accounts_master_panel()
-        render_renewal_list_panel()
+            m_count, manual_master_file = render_client_master_panel()
+            manual_acc_files = render_accounts_master_panel()
+            render_renewal_list_panel()
 
-        # Commission & Sheet Columns configuration panels
-        render_commission_panel()
-        render_custom_columns_panel(
-            active_headers,
-            is_custom_cols,
-            is_mode3,
-            is_bugging,
-            is_direct_sheet,
-            mode2_target_type,
-        )
+            render_commission_panel()
+            render_custom_columns_panel(
+                active_headers,
+                is_custom_cols,
+                is_mode3,
+                is_bugging,
+                is_direct_sheet,
+                mode2_target_type,
+            )
+
+            st.divider()
+            st.download_button(
+                "📋 Sample Client Master",
+                data=build_sample_master_bytes(),
+                file_name="Sample_Client_Master.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+            st.download_button(
+                "🏦 Sample Accounts Master",
+                data=build_sample_accounts_master_bytes(),
+                file_name="Sample_Accounts_Master.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
         st.divider()
-        st.download_button(
-            "📋 Sample Client Master",
-            data=build_sample_master_bytes(),
-            file_name="Sample_Client_Master.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        st.download_button(
-            "🏦 Sample Accounts Master",
-            data=build_sample_accounts_master_bytes(),
-            file_name="Sample_Accounts_Master.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
         if st.button("🚪 Sign Out", use_container_width=True):
             was_google = st.session_state.auth_method == "google"
             for k, v in DEFAULTS.items():
                 st.session_state[k] = v.copy() if isinstance(v, (dict, list)) else v
             st.session_state.pop("last_results", None)
             st.session_state.pop("active_entry_job", None)
+            st.session_state.pop("resolved_bug_notifs", None)
             try:
                 st.query_params.clear()
             except Exception:
@@ -206,6 +297,15 @@ def render_sidebar(active_headers, is_custom_cols, google_configured):
                 st.logout()
             else:
                 st.rerun()
+
+        st.markdown(
+            "<div class='pm-sb-support'>"
+            "📩 <strong>Need Help / Any Query?</strong><br/>"
+            "Please share details on mail:<br/>"
+            f"<a href='mailto:{SUPPORT_EMAIL}'>{SUPPORT_EMAIL}</a>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     return {
         "is_mode1": is_mode1,
