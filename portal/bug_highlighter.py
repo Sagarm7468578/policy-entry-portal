@@ -148,13 +148,13 @@ def _build_highlighter_html(
     if ui_mode == "user_report":
         toolbar_html = (
             "  <div class='toolbar'>"
-            "    <div class='tool-group'><span class='btn active-red'>🔴 Click Wrong Cells</span></div>"
+            "    <div class='tool-group'><span class='btn active-red'>🔴 Click Wrong PDF Cells</span></div>"
             "    <div class='sep'></div>"
             "    <div class='tool-group'>"
             "      <span id='bug-count' class='badge'>0 Selected</span>"
             "      <span id='fixed-count' class='badge has-fixed' style='display:none;'></span>"
             "      <button id='btn-filter' class='btn' onclick='toggleFilter()'>🔎 Selected Rows</button>"
-            "      <input id='user-bug-note' class='note-input' type='text' maxlength='250' placeholder='Optional note (e.g. Agency / Premium galat hai)...' />"
+            "      <input id='user-bug-note' class='note-input' type='text' maxlength='250' placeholder='Optional note (kisi aur column/master issue ke liye yahan likhein)...' />"
             "      <button id='btn-submit-admin' class='btn submit-admin' onclick='submitBugReportToAdmin()'>📨 Submit Bug Report to Admin</button>"
             "      <button id='btn-clear-green' class='btn clear-green' style='display:none;'></button>"
             "      <button class='btn danger' onclick='clearAll()'>🗑️ Clear</button>"
@@ -180,16 +180,18 @@ def _build_highlighter_html(
             "  </div>"
         )
 
-    retest_btn_css = (
+    extra_css = (
         ".btn.retest-btn { background: linear-gradient(135deg, #1d4ed8 0%, #0f766e 100%); "
         "color: #ffffff; border-color: #1d4ed8; font-weight: 600; }"
         ".btn.retest-btn:hover { filter: brightness(1.06); }"
         ".btn.retest-btn:disabled { opacity: 0.65; cursor: wait; }"
+        "td.locked-cell { background: #f8fafc !important; color: #64748b !important; cursor: not-allowed !important; }"
+        "td.locked-cell:hover { background: #f1f5f9 !important; }"
     )
 
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8' />"
-        f"<style>{css_code}\n{retest_btn_css}</style>"
+        f"<style>{css_code}\n{extra_css}</style>"
         "</head><body>"
         "<div class='container'>"
         f"{toolbar_html}"
@@ -249,7 +251,10 @@ def render_preview_table(
     r_col1, r_col2 = st.columns([3.2, 1.3])
     with r_col1:
         if is_reporting:
-            st.info("🐞 **Report Wrong Data Active:** Neeche galat cells par click karke 🔴 select karein, fir **📨 Submit Bug Report to Admin** dabayein.")
+            st.info(
+                "🐞 **Report Wrong Data Active:** Sirf PDF se aane wale galat cells par click karke 🔴 select karein "
+                "(🔒 locked columns Master/System fields hain — unke liye Note box use karein), fir **📨 Submit Bug Report to Admin** dabayein."
+            )
         else:
             st.caption("Koi value galat ya blank aayi ho to right side me **🐞 Report Wrong Data** par click karke seedha Admin ko bhej sakte hain.")
     with r_col2:
