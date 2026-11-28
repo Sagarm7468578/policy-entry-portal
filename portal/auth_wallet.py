@@ -61,7 +61,6 @@ def clear_persisted_session():
 
 
 def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fallback_email: str = "", fallback_name: str = ""):
-    """Populates Streamlit session state uniformly after Google or Email OTP login."""
     uid = str(res.get("user_id") or fallback_uid or fallback_email).strip()
     uemail = str(res.get("user_email") or fallback_email or "").strip().lower()
     umobile = str(res.get("user_mobile") or "").strip()
@@ -105,7 +104,6 @@ def apply_login_session(auth_method: str, res: dict, fallback_uid: str = "", fal
 
 
 def restore_email_otp_session_if_present() -> bool:
-    """Restores Email OTP login across browser F5 refresh using signed URL query param + backend plan check."""
     if st.session_state.get("logged_in", False):
         if st.session_state.get("auth_method") == "email_otp" and st.session_state.get("user_id"):
             _persist_session_to_url("email_otp", st.session_state["user_id"], st.session_state.get("user_email", ""))
@@ -141,7 +139,7 @@ def restore_email_otp_session_if_present() -> bool:
         {
             "user_id": uid,
             "user_email": uid if "@" in uid else "",
-            "user_name": uid.split("@")[0] if "@" in uid else uid,
+            "user_name": res.get("user_name") or (uid.split("@")[0] if "@" in uid else uid),
             "plan_type": res.get("plan_type", ""),
             "expiry": res.get("expiry", ""),
             "wallet_balance": res.get("wallet_balance", 0.0),
@@ -155,7 +153,6 @@ def restore_email_otp_session_if_present() -> bool:
 
 
 def refresh_wallet_status() -> dict:
-    """Fetches latest Plan Type, Expiry & Wallet Balance from Users sheet."""
     res = call_backend({
         "action": "get_wallet_status",
         "user_id": st.session_state.get("user_id", ""),
@@ -168,14 +165,12 @@ def refresh_wallet_status() -> dict:
         st.session_state["wallet_balance"] = float(res.get("wallet_balance") or 0.0)
         st.session_state["billable"] = bool(res.get("billable", False))
         st.session_state["trial_expired"] = bool(res.get("trial_expired", False))
+        if res.get("user_name"):
+            st.session_state["user_name"] = str(res.get("user_name")).strip()
     return res
 
 
 def render_wallet_banner_if_billable(key_prefix: str = "wl"):
-    """
-    Shows Wallet Balance + ₹10–₹500 Recharge form ONLY for Paid / Trial-Expired users.
-    Lifetime Free and active 7-Day Free Trial users see zero clutter.
-    """
     if not st.session_state.get("billable", False):
         return
 
@@ -237,10 +232,6 @@ def render_wallet_banner_if_billable(key_prefix: str = "wl"):
 
 
 def check_wallet_before_batch(pdf_count: int) -> bool:
-    """
-    Verifies a billable user has enough wallet balance before starting PDF extraction.
-    Returns True if allowed to proceed; False (and shows error) if insufficient balance.
-    """
     if not st.session_state.get("billable", False) or pdf_count <= 0:
         return True
 
@@ -261,10 +252,6 @@ def check_wallet_before_batch(pdf_count: int) -> bool:
 
 
 def charge_wallet_for_batch(done_count: int, batch_id: str) -> str:
-    """
-    Deducts ₹0.50 x done_count from a Paid user's wallet after extraction completes.
-    Returns a status note string to append to save_msg (empty string for Free/Trial users).
-    """
     if not st.session_state.get("billable", False) or done_count <= 0:
         return ""
 
@@ -286,11 +273,6 @@ def charge_wallet_for_batch(done_count: int, batch_id: str) -> str:
 
 
 def render_portal_login_screen(google_configured: bool, google_logged_in: bool, g_email: str):
-    """
-    Password-less 2-Tab Login Screen:
-      1. Google Sign-In (auto-registers new users + sends Welcome Email)
-      2. Email OTP (100% free instant 6-digit OTP via Gmail + auto-registers new users)
-    """
     _, col2, _ = st.columns([1, 2.2, 1])
     with col2:
         st.title("🛡️ MS.Soft Policy Mitra")
@@ -301,7 +283,6 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
             "📧 Email OTP",
         ])
 
-        # --- TAB 1: GOOGLE LOGIN ---
         with tab_g:
             if google_logged_in and st.session_state.google_auth_error:
                 st.error(f"❌ **{g_email}**: {st.session_state.google_auth_error}")
@@ -316,7 +297,6 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
             else:
                 st.warning("⚠️ Google Sign-In is not configured in Secrets. Please use the Email OTP tab.")
 
-        # --- TAB 2: EMAIL OTP (FREE & INSTANT) ---
         with tab_otp:
             st.caption("Enter your Email ID to receive an instant 6-digit Login OTP (no password needed).")
             sent_email = st.session_state.get("email_otp_sent_to", "")
@@ -386,3 +366,6 @@ def render_portal_login_screen(google_configured: bool, google_logged_in: bool, 
             "</div>",
             unsafe_allow_html=True,
         )
+
+
+
