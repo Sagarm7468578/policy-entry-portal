@@ -18,7 +18,6 @@ from portal.backend import (
 )
 from portal.auth_wallet import (
     apply_login_session,
-    restore_email_otp_session_if_present,
     render_portal_login_screen,
     charge_wallet_for_batch,
 )
@@ -88,8 +87,6 @@ def handle_auto_google_login():
             st.rerun()
         else:
             st.session_state.google_auth_error = g_res.get("message", "Could not verify Google account.")
-    elif not st.session_state.logged_in:
-        restore_email_otp_session_if_present()
     return google_configured, google_logged_in, g_email
 
 
@@ -213,6 +210,7 @@ def save_and_record_batch(
     batch_ts = now_ist.strftime("%Y%m%d_%H%M%S")
     batch_uid = f"{st.session_state.round_counter}_{batch_ts}"
 
+    # Charge ₹0.50 ONLY per successfully extracted, non-duplicate entry for Paid Wallet users
     billable_entries = max(0, len(done_files) - skipped_count)
     wallet_note = charge_wallet_for_batch(billable_entries, batch_uid) if not save_error else ""
     if wallet_note:
