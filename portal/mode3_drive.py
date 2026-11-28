@@ -14,6 +14,10 @@ from portal.state import (
     get_active_accounts_df,
     save_and_record_batch,
 )
+from portal.auth_wallet import (
+    render_wallet_banner_if_billable,
+    check_wallet_before_batch,
+)
 from portal.retest_engine import get_skip_pdf_reason, attach_retest_cache
 
 _POLICY_LIST_LOCK_CSS = """
@@ -94,7 +98,6 @@ def _is_file_selected_default(f_meta: dict) -> bool:
         return True
     if sel_mode == "none":
         return False
-    # Default daily-entry mode: New & Prev-Error auto-selected, Entered unselected
     return f_meta.get("last_status") != "DONE"
 
 
@@ -163,7 +166,6 @@ def _step_mode3_job(job):
         st.rerun()
         return
 
-    # All PDFs read — finalize and save to Drive Excel
     st.session_state.pop("active_entry_job", None)
     extracted_rows = job["extracted_rows"]
     if extracted_rows:
@@ -200,16 +202,17 @@ def _step_mode3_job(job):
 
 def render_mode3_workspace(ctx):
     """Renders Mode 3 (Google Drive Folder Scanner + Direct Drive Excel .xlsx entry)."""
+    render_wallet_banner_if_billable("m3")
+
     active_folder_url = st.session_state.health_folder_url
     active_m3_excel_url = st.session_state.mode3_excel_url
 
     if not active_m3_excel_url:
-        st.warning("📊 Please link your Google Drive `.xlsx` Excel file first via **Left Sidebar → Mode 3 Drive Excel**.")
+        st.warning("📊 Please link your Google Drive `.xlsx` Excel file first via **Left Sidebar → 🔌 Connectors → Mode 3 Drive Excel**.")
     if not active_folder_url:
-        st.warning("📁 Please link your **`MEDICLAIM`** parent folder (or direct month folder) via **Left Sidebar → Drive Auto-Folders → Health**.")
+        st.warning("📁 Please link your **`MEDICLAIM`** parent folder (or direct month folder) via **Left Sidebar → 🔌 Connectors → Drive Auto-Folders**.")
         return
 
-    # Restore last selected Year & Month from URL query params across browser F5 refresh
     if not st.session_state.drive_selected_year:
         qp_yr = _qp_get("yr", "").strip()
         qp_mo = _qp_get("mo", "").strip()
@@ -313,7 +316,6 @@ def render_mode3_workspace(ctx):
         st.info("🎉 All PDFs in this folder have already been entered. Add new PDFs and click **Scan Folder**.")
         return
 
-    # Smart daily-entry default: New/Error = Selected, Entered = Unselected
     list_sig = (
         f"M3|{info.get('active_folder_id', '')}|{include_done}|"
         + ",".join(f"{f['id']}:{f.get('last_status', '')}" for f in candidate_files)
@@ -374,7 +376,9 @@ def render_mode3_workspace(ctx):
         key="start_mode3_btn",
     ):
         if not active_m3_excel_url:
-            st.warning("Please link your Google Drive `.xlsx` file first via **Left Sidebar → Mode 3 Drive Excel**.")
+            st.warning("Please link your Google Drive `.xlsx` file first via **Left Sidebar → 🔌 Connectors → Mode 3 Drive Excel**.")
+            return
+        if not check_wallet_before_batch(len(target_files)):
             return
         st.session_state.pop("last_results", None)
         st.session_state["active_entry_job"] = {
