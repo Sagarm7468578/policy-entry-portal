@@ -52,6 +52,7 @@ _PLAN_SPECS = [
     ("BAJAJ ALLIANZ", "bajaj_allianz_travel", "is_bajaj_allianz_travel", "parse_bajaj_allianz_travel"),
     ("ICICI LOMBARD", "icici_lombard_group_health", "is_icici_lombard_group_health", "parse_icici_lombard_group_health"),
     ("ORIENTAL", "oriental_happy_family_floater", "is_oriental_happy_family_floater", "parse_oriental_happy_family_floater"),
+    ("UNITED INDIA", "united_india_family_medicare", "is_united_india_family_medicare", "parse_united_india_family_medicare"),
 ]
 
 PLAN_PARSERS = {}
